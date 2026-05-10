@@ -1,45 +1,83 @@
 import * as vscode from 'vscode';
 import { LogParser } from './LogParser';
 import { LogPanelProvider } from './LogPanelProvider';
+import { LogViewerCoordinator } from './logViewerCoordinator';
+import { buildLogViewerHtml } from './logViewerHtml';
 import { BlockPatterns, ParserSettings, PRESETS } from './types';
 
-let panelProvider: LogPanelProvider;
+let coordinator: LogViewerCoordinator;
 let parser: LogParser;
 
 export function activate(context: vscode.ExtensionContext) {
-  panelProvider = new LogPanelProvider(context.extensionUri);
+  coordinator = new LogViewerCoordinator();
   const patterns = resolvePatterns();
   const lineStripPattern = vscode.workspace.getConfiguration('flutterLogFold').get<string>('lineStripPattern', '');
 
   parser = new LogParser(patterns, lineStripPattern, resolveParserSettings(), (entry) => {
-    panelProvider.addEntry(entry);
+    coordinator.addEntry(entry);
   });
 
-  panelProvider.setKnownTagsGetter(() => parser.getKnownTags());
+  coordinator.setKnownTagsGetter(() => parser.getKnownTags());
 
-  // Register webview provider
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(LogPanelProvider.viewType, panelProvider)
+    vscode.window.registerWebviewViewProvider(
+      LogPanelProvider.viewType,
+      new LogPanelProvider(context.extensionUri, coordinator),
+    ),
   );
 
-  // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('flutterLogFold.show', () => {
       vscode.commands.executeCommand('flutterLogFold.logView.focus');
-    })
+    }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('flutterLogFold.clear', () => {
-      panelProvider.clearAll();
-    })
+      coordinator.clearAll();
+    }),
   );
 
-  // Register debug adapter tracker
+  let activeViewerPanels = 0;
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('flutterLogFold.newViewer', () => {
+      const config = vscode.workspace.getConfiguration('flutterLogFold');
+      const maxPanels = config.get<number>('maxViewerPanels', 10);
+      if (activeViewerPanels >= maxPanels) {
+        void vscode.window.showWarningMessage(
+          `Maximum number of Flutter log viewer panels (${maxPanels}) reached. Increase flutterLogFold.maxViewerPanels to open more.`,
+        );
+        return;
+      }
+
+      const panel = vscode.window.createWebviewPanel(
+        'flutterLogFold.viewer',
+        'Flutter Logs',
+        vscode.ViewColumn.Beside,
+        {
+          enableScripts: true,
+          localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'webview')],
+        },
+      );
+
+      panel.webview.html = buildLogViewerHtml(panel.webview, context.extensionUri);
+
+      activeViewerPanels++;
+      const registration = coordinator.registerWebview(panel.webview);
+      const bridge = coordinator.attachMessageBridge(panel.webview);
+
+      panel.onDidDispose(() => {
+        activeViewerPanels--;
+        bridge.dispose();
+        registration.dispose();
+      });
+    }),
+  );
+
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterTrackerFactory('dart', {
       createDebugAdapterTracker(session: vscode.DebugSession) {
-        // Auto-open panel if configured
         const autoOpen = vscode.workspace.getConfiguration('flutterLogFold').get<boolean>('autoOpen', true);
         if (autoOpen) {
           vscode.commands.executeCommand('flutterLogFold.logView.focus');
@@ -60,10 +98,9 @@ export function activate(context: vscode.ExtensionContext) {
           },
         };
       },
-    })
+    }),
   );
 
-  // Listen for configuration changes
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('flutterLogFold')) {
@@ -71,9 +108,9 @@ export function activate(context: vscode.ExtensionContext) {
         const newLineStrip = vscode.workspace.getConfiguration('flutterLogFold').get<string>('lineStripPattern', '');
         parser.updatePatterns(newPatterns, newLineStrip);
         parser.updateSettings(resolveParserSettings());
-        panelProvider.updateSettings();
+        coordinator.updateSettings();
       }
-    })
+    }),
   );
 }
 
@@ -85,7 +122,6 @@ function resolvePatterns(): BlockPatterns {
     return PRESETS[preset];
   }
 
-  // Custom preset
   const blockStart = config.get<string>('blockStart', '┌──');
   const blockEnd = config.get<string>('blockEnd', '└──');
   const blockContentPrefix = config.get<string>('blockContentPrefix', '│');
@@ -108,6 +144,5 @@ function resolveParserSettings(): ParserSettings {
 }
 
 export function deactivate() {
-  // Parser flush on deactivation
   parser?.flush();
 }

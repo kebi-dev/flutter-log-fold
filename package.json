@@ -63,6 +63,10 @@
       {
         "command": "flutterLogFold.clear",
         "title": "Flutter Logs: Clear"
+      },
+      {
+        "command": "flutterLogFold.newViewer",
+        "title": "Flutter Logs: New Viewer"
       }
     ],
     "configuration": {
@@ -84,6 +88,13 @@
           "minimum": 50,
           "maximum": 10000,
           "description": "Maximum number of log entries kept in the panel and buffer (oldest are removed)."
+        },
+        "flutterLogFold.maxViewerPanels": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Maximum number of editor-area Flutter log viewer panels that can be open at once (sidebar does not count)."
         },
         "flutterLogFold.maxBlockLines": {
           "type": "number",

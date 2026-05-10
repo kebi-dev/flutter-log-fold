@@ -44,12 +44,28 @@
    */
   function createChipElement(category, isSeverity) {
     const chip = document.createElement('button');
-    chip.className = 'chip active';
+    chip.type = 'button';
+    chip.className = 'chip chip-toggle active';
     chip.dataset.category = category;
-    chip.textContent = category.toUpperCase();
+    chip.setAttribute('role', 'switch');
+    chip.setAttribute('aria-checked', 'true');
+    chip.setAttribute('aria-label', 'Show ' + category + ' logs');
+
+    const label = document.createElement('span');
+    label.className = 'chip-label';
+    label.textContent = category.toUpperCase();
+
+    const track = document.createElement('span');
+    track.className = 'chip-track';
+    track.setAttribute('aria-hidden', 'true');
+    const thumb = document.createElement('span');
+    thumb.className = 'chip-thumb';
+    track.appendChild(thumb);
+
+    chip.appendChild(label);
+    chip.appendChild(track);
 
     if (!isSeverity) {
-      // Dynamic tag: apply deterministic HSL color
       const hue = hashStringToHue(category);
       const bg = 'hsl(' + hue + ', 55%, 35%)';
       chip.style.background = bg;
@@ -282,8 +298,10 @@
     showSystemLogs = !showSystemLogs;
     if (showSystemLogs) {
       chipSystem.classList.add('active');
+      chipSystem.setAttribute('aria-checked', 'true');
     } else {
       chipSystem.classList.remove('active');
+      chipSystem.setAttribute('aria-checked', 'false');
     }
     applyFilters();
   });
@@ -538,11 +556,9 @@
     chipBar.querySelectorAll('.chip[data-category]').forEach((chip) => {
       const el = /** @type {HTMLElement} */ (chip);
       const cat = el.dataset.category;
-      if (cat && activeCategories.get(cat)) {
-        el.classList.add('active');
-      } else {
-        el.classList.remove('active');
-      }
+      const on = !!(cat && activeCategories.get(cat));
+      el.classList.toggle('active', on);
+      el.setAttribute('aria-checked', on ? 'true' : 'false');
     });
   }
 
