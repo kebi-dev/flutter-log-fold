@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { LogEntry, ExtensionToWebviewMessage } from './types';
+import { openDartPackageLocation } from './dartLocationOpener';
+import { LogEntry, ExtensionToWebviewMessage, WebviewToExtensionMessage } from './types';
 
 /**
  * Owns the log buffer and broadcasts ExtensionToWebviewMessage payloads to every
@@ -47,12 +48,22 @@ export class LogViewerCoordinator {
   }
 
   attachMessageBridge(webview: vscode.Webview): vscode.Disposable {
-    return webview.onDidReceiveMessage((message: { command?: string }) => {
+    return webview.onDidReceiveMessage((message: WebviewToExtensionMessage) => {
       if (message.command === 'ready') {
         this.replayState(webview);
       }
       if (message.command === 'clear') {
         this.clearAll();
+      }
+      if (message.command === 'openNewViewer') {
+        void vscode.commands.executeCommand('flutterLogFold.newViewer');
+      }
+      if (message.command === 'openDartLocation') {
+        const pkg = message.packageName ?? '';
+        const rel = message.relativePath ?? '';
+        const line = message.line ?? 0;
+        const col = message.column ?? 1;
+        void openDartPackageLocation(pkg, rel, line, col);
       }
     });
   }

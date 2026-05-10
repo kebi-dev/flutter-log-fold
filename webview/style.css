@@ -36,8 +36,18 @@ body {
 .toolbar-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-right: 8px;
+  margin-right: 4px;
+  border-right: 1px solid var(--vscode-panel-border);
 }
 
 .toolbar button {
@@ -51,6 +61,15 @@ body {
 }
 
 .toolbar button:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.toolbar button.toolbar-btn-accent {
+  font-weight: 600;
+  border: 1px solid var(--vscode-button-border, transparent);
+}
+
+.toolbar button.toolbar-btn-accent:hover {
   background: var(--vscode-button-hoverBackground);
 }
 
@@ -76,12 +95,36 @@ body {
   margin-left: auto;
 }
 
-/* ── Chip bar ── */
+/* ── Chip bar (horizontal scroll in narrow layouts) ── */
+.chip-bar-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-top: 4px;
+  flex-shrink: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--vscode-scrollbarSlider-background) transparent;
+}
+
+.chip-bar-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+
+.chip-bar-scroll::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background);
+  border-radius: 3px;
+}
+
+.chip-bar-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground);
+}
+
 .chip-bar {
   display: flex;
-  gap: 4px;
-  padding-top: 4px;
-  flex-wrap: wrap;
+  gap: 3px;
+  flex-wrap: nowrap;
+  align-items: center;
+  min-height: 28px;
+  padding-bottom: 2px;
 }
 
 .chip {
@@ -98,11 +141,12 @@ body {
 .chip.chip-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 8px 3px 10px;
-  border-radius: 12px;
+  gap: 4px;
+  padding: 2px 6px 2px 8px;
+  border-radius: 11px;
   border-color: var(--vscode-widget-border, var(--vscode-panel-border));
   transition: border-color 0.15s, box-shadow 0.15s;
+  flex-shrink: 0;
 }
 
 .chip.chip-toggle:focus-visible {
@@ -121,10 +165,10 @@ body {
 
 .chip-toggle .chip-track {
   position: relative;
-  width: 32px;
-  height: 18px;
+  width: 28px;
+  height: 16px;
   flex-shrink: 0;
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--vscode-input-background);
   border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, var(--vscode-panel-border)));
   transition: background 0.15s ease, border-color 0.15s ease;
@@ -137,10 +181,10 @@ body {
 
 .chip-toggle .chip-thumb {
   position: absolute;
-  top: 2px;
+  top: 1.5px;
   left: 2px;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
   background: var(--vscode-editor-background);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-editor-foreground) 22%, transparent);
@@ -148,7 +192,7 @@ body {
 }
 
 .chip-toggle.active .chip-thumb {
-  transform: translateX(14px);
+  transform: translateX(12px);
 }
 
 body.vscode-high-contrast .chip-toggle .chip-thumb {
@@ -201,6 +245,7 @@ body.vscode-high-contrast .chip-toggle .chip-thumb {
   background: var(--vscode-panel-border);
   align-self: stretch;
   margin: 0 2px;
+  flex-shrink: 0;
 }
 
 .source-chip.chip-toggle {
@@ -249,6 +294,22 @@ body.vscode-high-contrast .chip-toggle .chip-thumb {
 
 .log-entry.hidden {
   display: none;
+}
+
+/* Clickable package:… links (jump to source) */
+.dart-source-link {
+  color: var(--vscode-textLink-foreground);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.dart-source-link:hover {
+  color: var(--vscode-textLink-activeForeground);
+}
+
+.dart-source-link:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
 }
 
 /* ── Badge ── */

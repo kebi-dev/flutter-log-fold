@@ -11,6 +11,7 @@
   const btnClear = /** @type {HTMLElement} */ (document.getElementById('btn-clear'));
   const btnCollapse = /** @type {HTMLElement} */ (document.getElementById('btn-collapse'));
   const btnExpand = /** @type {HTMLElement} */ (document.getElementById('btn-expand'));
+  const btnNewViewer = /** @type {HTMLElement} */ (document.getElementById('btn-new-viewer'));
   const chipSystem = /** @type {HTMLElement} */ (document.getElementById('chip-system'));
   const chipSeparator = /** @type {HTMLElement} */ (document.getElementById('chip-separator'));
 
@@ -110,6 +111,32 @@
   container.addEventListener('scroll', () => {
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     userAtBottom = distanceFromBottom <= SCROLL_THRESHOLD;
+  });
+
+  container.addEventListener('click', (e) => {
+    const link = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.dart-source-link'));
+    if (!link || !container.contains(link)) { return; }
+    e.preventDefault();
+    e.stopPropagation();
+    const pkg = link.dataset.package;
+    const rel = link.dataset.relativePath;
+    const line = parseInt(link.dataset.line || '0', 10);
+    const col = parseInt(link.dataset.column || '1', 10);
+    if (!pkg || !rel) { return; }
+    vscode.postMessage({ command: 'openDartLocation', packageName: pkg, relativePath: rel, line, column: col });
+  });
+
+  container.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') { return; }
+    const link = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.dart-source-link'));
+    if (!link || !container.contains(link)) { return; }
+    e.preventDefault();
+    const pkg = link.dataset.package;
+    const rel = link.dataset.relativePath;
+    const line = parseInt(link.dataset.line || '0', 10);
+    const col = parseInt(link.dataset.column || '1', 10);
+    if (!pkg || !rel) { return; }
+    vscode.postMessage({ command: 'openDartLocation', packageName: pkg, relativePath: rel, line, column: col });
   });
 
   // ── ANSI → HTML converter ──
@@ -242,6 +269,76 @@
     return result;
   }
 
+  /**
+   * Linkify (package:name/path/file.dart:line:col) in plain text; escapes non-match segments.
+   * @param {string} plainChunk
+   * @returns {string}
+   */
+  function injectDartSourceLinksHtml(plainChunk) {
+    if (!plainChunk) return '';
+    var out = '';
+    var last = 0;
+    var re = /\((package:([a-zA-Z_][a-zA-Z0-9_]*)\/([^:)]+\.dart):(\d+):(\d+))\)/g;
+    var m;
+    while ((m = re.exec(plainChunk)) !== null) {
+      out += escapeHtml(plainChunk.slice(last, m.index));
+      var pkg = m[2];
+      var rel = m[3];
+      var lineNum = m[4];
+      var colNum = m[5];
+      var pathParts = rel.split('/');
+      var fileName = pathParts[pathParts.length - 1];
+      var dirPrefix = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') + '/' : '';
+      var openParen = '(package:' + pkg + '/' + dirPrefix;
+      out += escapeHtml(openParen);
+      out += '<span class="dart-source-link" role="link" tabindex="0" data-package="' +
+        escapeHtml(pkg) + '" data-relative-path="' + escapeHtml(rel) + '" data-line="' +
+        lineNum + '" data-column="' + colNum + '">' +
+        escapeHtml(fileName + ':' + lineNum) + '</span>';
+      out += escapeHtml(':' + colNum + ')');
+      last = re.lastIndex;
+    }
+    out += escapeHtml(plainChunk.slice(last));
+    return out;
+  }
+
+  /**
+   * Like ansiToHtml but injects Dart package links inside plain-text segments.
+   * @param {string} text
+   * @returns {string}
+   */
+  function ansiToHtmlWithDartLinks(text) {
+    const re = /\x1b\[([0-9;]*)([a-zA-Z])/g;
+    let result = '';
+    let lastIdx = 0;
+    let openSpans = 0;
+    let m;
+
+    while ((m = re.exec(text)) !== null) {
+      result += injectDartSourceLinksHtml(text.substring(lastIdx, m.index));
+      lastIdx = re.lastIndex;
+
+      if (m[2] !== 'm') { continue; }
+
+      const raw = m[1];
+      const codes = raw === '' ? [0] : raw.split(';').map(Number);
+
+      if (codes[0] === 0 && (codes.length === 1 || raw === '')) {
+        while (openSpans > 0) { result += '</span>'; openSpans--; }
+      } else {
+        const style = codesToStyle(codes);
+        if (style) {
+          result += '<span style="' + style + '">';
+          openSpans++;
+        }
+      }
+    }
+
+    result += injectDartSourceLinksHtml(text.substring(lastIdx));
+    while (openSpans > 0) { result += '</span>'; openSpans--; }
+    return result;
+  }
+
   // ── Message handling ──
 
   window.addEventListener('message', (event) => {
@@ -285,6 +382,10 @@
 
   btnExpand.addEventListener('click', () => {
     container.querySelectorAll('details:not([open])').forEach((d) => d.setAttribute('open', ''));
+  });
+
+  btnNewViewer.addEventListener('click', () => {
+    vscode.postMessage({ command: 'openNewViewer' });
   });
 
   filterInput.addEventListener('input', () => {
@@ -428,7 +529,7 @@
       const badge = createBadge(entry.category);
       div.appendChild(badge);
       const textSpan = document.createElement('span');
-      textSpan.innerHTML = ansiToHtml(rawText);
+      textSpan.innerHTML = ansiToHtmlWithDartLinks(rawText);
       div.appendChild(textSpan);
     } else {
       const details = document.createElement('details');
@@ -452,12 +553,11 @@
       summaryText.className = 'summary-text';
       const firstLine = (entry.lines && entry.lines[0]) || '';
       if (entry.formattedSummary) {
-        // Wrap formatted summary in the original ANSI color from the first line
         const ansiMatch = firstLine.match(/^(\x1b\[[0-9;]*m)+/);
         const colorPrefix = ansiMatch ? ansiMatch[0] : '';
-        summaryText.innerHTML = ansiToHtml(colorPrefix + entry.summary + (colorPrefix ? '\x1b[0m' : ''));
+        summaryText.innerHTML = ansiToHtmlWithDartLinks(colorPrefix + entry.summary + (colorPrefix ? '\x1b[0m' : ''));
       } else {
-        summaryText.innerHTML = ansiToHtml(firstLine || entry.summary);
+        summaryText.innerHTML = injectDartSourceLinksHtml(entry.summary || '');
       }
 
       summary.appendChild(arrow);
@@ -725,7 +825,7 @@
     const jsonInfo = findFirstJson(cleanText);
 
     if (!jsonInfo) {
-      return ansiToHtml(lines.join('\n'));
+      return ansiToHtmlWithDartLinks(lines.join('\n'));
     }
 
     const { start, end, parsed } = jsonInfo;
@@ -736,7 +836,7 @@
 
     // Text before JSON
     if (before.trim()) {
-      html += escapeHtml(before);
+      html += injectDartSourceLinksHtml(before);
     }
 
     // JSON as collapsible tree
@@ -744,7 +844,7 @@
 
     // Text after JSON
     if (after.trim()) {
-      html += '\n' + escapeHtml(after);
+      html += '\n' + injectDartSourceLinksHtml(after);
     }
 
     return html;

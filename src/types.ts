@@ -38,7 +38,11 @@ export interface ExtensionToWebviewMessage {
 }
 
 export interface WebviewToExtensionMessage {
-  command: 'clear' | 'ready';
+  command: 'clear' | 'ready' | 'openNewViewer' | 'openDartLocation';
+  packageName?: string;
+  relativePath?: string;
+  line?: number;
+  column?: number;
 }
 
 export const PRESETS: Record<string, BlockPatterns> = {

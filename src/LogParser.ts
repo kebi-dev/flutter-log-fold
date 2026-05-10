@@ -1,4 +1,5 @@
 import { LogEntry, LogCategory, LogSource, BlockPatterns, ParserSettings, SEVERITY_LEVELS } from './types';
+import { pickBestSummaryLine } from './summaryPick';
 import { FormatterRegistry } from './formatters/registry';
 import { blocFormatters } from './formatters/bloc';
 import { routeFormatters } from './formatters/route';
@@ -337,15 +338,7 @@ export class LogParser {
   }
 
   private extractSummary(cleanedLines: string[]): string {
-    for (const line of cleanedLines) {
-      const trimmed = line.trim();
-      if (trimmed.length > 0) {
-        return trimmed.length > MAX_SUMMARY_LENGTH
-          ? trimmed.substring(0, MAX_SUMMARY_LENGTH) + '...'
-          : trimmed;
-      }
-    }
-    return '(empty block)';
+    return pickBestSummaryLine(cleanedLines, MAX_SUMMARY_LENGTH);
   }
 }
 
