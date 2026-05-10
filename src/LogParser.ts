@@ -8,6 +8,9 @@ import { talkerDefaultFormatter } from './formatters/talker-default';
 const ANSI_REGEX = /\x1b\[[0-9;]*[a-zA-Z]/g;
 const ANDROID_LOG_PREFIX = /^([A-Z])\/(\S+)\s*\(\s*\d+\):\s?/;
 const FLUTTER_LOG_PREFIX = /^flutter:\s?/;
+/** Lines from flutter run / VS Code that lack I/flutter or flutter: — not Android log spam. */
+const FLUTTER_TOOLING_LINE =
+  /^(Launching\s|✓\s+Built\s|Built\s|Running Gradle task\b|Installing\b|Uninstalling\b|Error\s+launching\s+application\b|Flutter run key commands|The Flutter DevTools|Dart VM Service|Connecting to VM Service|Waiting for connection from debug service|A Dart VM Service on\s|Syncing files to device\b|Could not find Dart in your PATH)/i;
 const TAG_REGEX = /\[([a-zA-Z][a-zA-Z0-9]*?)(?:-[^\]]*)??\]/;
 
 interface CategoryRule {
@@ -156,6 +159,11 @@ export class LogParser {
     // lineStripPattern on detection line only
     if (this.lineStripRegex) {
       detectLine = detectLine.replace(this.lineStripRegex, '');
+    }
+
+    // Tooling banners default to source=system (no logcat prefix); keep them visible without SYS chip.
+    if (source === 'system' && FLUTTER_TOOLING_LINE.test(detectLine.trim())) {
+      source = 'flutter';
     }
 
     // Block detection using detectLine

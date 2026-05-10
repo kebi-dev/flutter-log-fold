@@ -113,6 +113,7 @@
     userAtBottom = distanceFromBottom <= SCROLL_THRESHOLD;
   });
 
+  // Capture phase: clicks inside <summary> otherwise toggle <details> before we handle the link.
   container.addEventListener('click', (e) => {
     const link = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.dart-source-link'));
     if (!link || !container.contains(link)) { return; }
@@ -124,7 +125,7 @@
     const col = parseInt(link.dataset.column || '1', 10);
     if (!pkg || !rel) { return; }
     vscode.postMessage({ command: 'openDartLocation', packageName: pkg, relativePath: rel, line, column: col });
-  });
+  }, true);
 
   container.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') { return; }
@@ -269,6 +270,120 @@
     return result;
   }
 
+  /** Matches Flutter / Dart stack frames (with or without wrapping parentheses). */
+  var DART_PACKAGE_LOC_RE = /\bpackage:([a-zA-Z_][a-zA-Z0-9_]*)\/([^:\s)]+\.dart):(\d+):(\d+)/g;
+
+  /**
+   * @param {string} plainText
+   * @returns {{ packageName: string, relativePath: string, line: number, column: number, label: string }[]}
+   */
+  function extractDartPackageRefs(plainText) {
+    if (!plainText) return [];
+    var seen = Object.create(null);
+    var out = [];
+    var re = new RegExp(DART_PACKAGE_LOC_RE.source, 'g');
+    var m;
+    while ((m = re.exec(plainText)) !== null) {
+      var pkg = m[1];
+      var rel = m[2];
+      var lineNum = m[3];
+      var colNum = m[4];
+      var key = pkg + '\0' + rel + '\0' + lineNum + '\0' + colNum;
+      if (seen[key]) continue;
+      seen[key] = true;
+      var parts = rel.split('/');
+      var fileName = parts[parts.length - 1];
+      out.push({
+        packageName: pkg,
+        relativePath: rel,
+        line: parseInt(lineNum, 10),
+        column: parseInt(colNum, 10),
+        label: fileName + ':' + lineNum,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Prefer the #0 stack frame's package location (immediate caller site).
+   * Otherwise first package ref in the entry (document order).
+   * @param {string} plainText
+   * @returns {{ packageName: string, relativePath: string, line: number, column: number, label: string }[]}
+   */
+  function pickPrimaryCallerRefs(plainText) {
+    if (!plainText) return [];
+    var lines = plainText.split(/\r?\n/);
+    var li;
+    for (li = 0; li < lines.length; li++) {
+      if (/^\s*#0\b/.test(lines[li])) {
+        var fromFrame = extractDartPackageRefs(lines[li]);
+        if (fromFrame.length > 0) {
+          return [fromFrame[0]];
+        }
+      }
+    }
+    var all = extractDartPackageRefs(plainText);
+    return all.length > 0 ? [all[0]] : [];
+  }
+
+  /**
+   * Right-hand column links (Debug Console style).
+   * @param {string} plainText
+   * @param {{ primaryCallerOnly?: boolean }} [options]
+   * @returns {HTMLElement | null}
+   */
+  function createSourceGutter(plainText, options) {
+    options = options || {};
+    var refs;
+    var extraHiddenCount = 0;
+    if (options.primaryCallerOnly) {
+      refs = pickPrimaryCallerRefs(plainText);
+      var totalUnique = extractDartPackageRefs(plainText).length;
+      extraHiddenCount = Math.max(0, totalUnique - refs.length);
+    } else {
+      refs = extractDartPackageRefs(plainText);
+    }
+    if (refs.length === 0) return null;
+    var aside = document.createElement('aside');
+    aside.className = 'log-entry-source-gutter';
+    aside.setAttribute('aria-label', 'Jump to source');
+    var maxLinks = options.primaryCallerOnly ? 1 : 10;
+    if (extraHiddenCount > 0) {
+      var more = document.createElement('span');
+      more.className = 'log-entry-source-gutter-more';
+      more.textContent = '+' + extraHiddenCount;
+      more.title = extraHiddenCount + ' more location(s) — expand the log to see full stack links';
+      aside.appendChild(more);
+    }
+    for (var i = 0; i < refs.length && i < maxLinks; i++) {
+      var r = refs[i];
+      var span = document.createElement('span');
+      span.className = 'dart-source-link dart-source-link--gutter';
+      span.setAttribute('role', 'link');
+      span.setAttribute('tabindex', '0');
+      span.dataset.package = r.packageName;
+      span.dataset.relativePath = r.relativePath;
+      span.dataset.line = String(r.line);
+      span.dataset.column = String(r.column);
+      span.textContent = r.label;
+      aside.appendChild(span);
+    }
+    return aside;
+  }
+
+  /** Collapsed block summary: keep one tight line (full text on hover via title). */
+  var COLLAPSED_SUMMARY_MAX_DEFAULT = 110;
+  var COLLAPSED_SUMMARY_MAX_ERROR = 72;
+
+  /**
+   * @param {string} plain
+   * @param {number} maxLen
+   */
+  function ellipsisCollapsedSummary(plain, maxLen) {
+    if (!plain || plain.length <= maxLen) return plain;
+    return plain.slice(0, Math.max(1, maxLen - 1)) + '\u2026';
+  }
+
   /**
    * Linkify (package:name/path/file.dart:line:col) in plain text; escapes non-match segments.
    * @param {string} plainChunk
@@ -278,7 +393,7 @@
     if (!plainChunk) return '';
     var out = '';
     var last = 0;
-    var re = /\((package:([a-zA-Z_][a-zA-Z0-9_]*)\/([^:)]+\.dart):(\d+):(\d+))\)/g;
+    var re = new RegExp('\\((' + DART_PACKAGE_LOC_RE.source + ')\\)', 'g');
     var m;
     while ((m = re.exec(plainChunk)) !== null) {
       out += escapeHtml(plainChunk.slice(last, m.index));
@@ -526,11 +641,19 @@
     div.dataset.searchText = stripAnsi(rawText).toLowerCase();
 
     if (entry.type === 'plain') {
+      const main = document.createElement('div');
+      main.className = 'log-entry-main';
       const badge = createBadge(entry.category);
-      div.appendChild(badge);
+      main.appendChild(badge);
       const textSpan = document.createElement('span');
+      textSpan.className = 'log-entry-text';
       textSpan.innerHTML = ansiToHtmlWithDartLinks(rawText);
-      div.appendChild(textSpan);
+      main.appendChild(textSpan);
+      div.appendChild(main);
+      const plainGutter = createSourceGutter(stripAnsi(rawText));
+      if (plainGutter) {
+        div.appendChild(plainGutter);
+      }
     } else {
       const details = document.createElement('details');
       if (!collapseByDefault) {
@@ -552,18 +675,29 @@
       const summaryText = document.createElement('span');
       summaryText.className = 'summary-text';
       const firstLine = (entry.lines && entry.lines[0]) || '';
+      var sumFull = entry.summary || '';
+      var maxCollapsed =
+        entry.category === 'error' || entry.category === 'critical'
+          ? COLLAPSED_SUMMARY_MAX_ERROR
+          : COLLAPSED_SUMMARY_MAX_DEFAULT;
+      var sumShown = ellipsisCollapsedSummary(sumFull, maxCollapsed);
+      summaryText.title = sumFull;
       if (entry.formattedSummary) {
         const ansiMatch = firstLine.match(/^(\x1b\[[0-9;]*m)+/);
         const colorPrefix = ansiMatch ? ansiMatch[0] : '';
-        summaryText.innerHTML = ansiToHtmlWithDartLinks(colorPrefix + entry.summary + (colorPrefix ? '\x1b[0m' : ''));
+        summaryText.innerHTML = ansiToHtmlWithDartLinks(colorPrefix + sumShown + (colorPrefix ? '\x1b[0m' : ''));
       } else {
-        summaryText.innerHTML = injectDartSourceLinksHtml(entry.summary || '');
+        summaryText.innerHTML = injectDartSourceLinksHtml(sumShown);
       }
 
       summary.appendChild(arrow);
       summary.appendChild(badge);
       summary.appendChild(timestamp);
       summary.appendChild(summaryText);
+      const blockGutter = createSourceGutter(stripAnsi(rawText), { primaryCallerOnly: true });
+      if (blockGutter) {
+        summary.appendChild(blockGutter);
+      }
 
       const content = document.createElement('div');
       content.className = 'block-content';

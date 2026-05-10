@@ -85,6 +85,17 @@ describe('source detection', () => {
     parser.processOutput('plain text line\n');
     expect(entries[0].source).toBe('system');
   });
+
+  it('treats Flutter launch / build tooling lines as source=flutter (visible without SYS)', () => {
+    const { entries, parser } = collect();
+    parser.processOutput('Launching lib/main.dart on Pixel 6a in debug mode...\n');
+    parser.processOutput('✓ Built build/app/outputs/flutter-apk/app-debug.apk\n');
+    expect(entries).toHaveLength(2);
+    expect(entries[0].source).toBe('flutter');
+    expect(entries[0].summary).toContain('Launching lib/main.dart');
+    expect(entries[1].source).toBe('flutter');
+    expect(entries[1].summary).toContain('Built build/app');
+  });
 });
 
 // ── 3. Block detection ───────────────────────────────────────────────
