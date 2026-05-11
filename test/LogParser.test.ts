@@ -291,14 +291,74 @@ describe('category detection', () => {
     expect(entries[0].category).toBe('error');
   });
 
-  it('[bloc-transition] tag → category=bloc (TAG_REGEX captures base tag)', () => {
+  it('[bloc-transition] tag → category=bloc (Talker base before hyphen)', () => {
     const { entries, parser } = collect();
     parser.processOutput(
       '┌──────────\n│ [bloc-transition] | 10:00:00 1ms |\n│ X changed\n│ CURRENT state: A\n│ NEXT state: B\n└──────────\n',
     );
-    // TAG_REGEX captures the base tag 'bloc' (lazy match), '-transition' is non-capturing
     expect(entries[0].category).toBe('bloc');
     expect(parser.getKnownTags()).toContain('bloc');
+  });
+
+  it('[H5 参数] tag → dynamic category with normalized key', () => {
+    const { entries, parser } = collect();
+    parser.processOutput('[H5 参数] key=value\n');
+    expect(entries[0].category).toBe('h5_参数');
+    expect(parser.getKnownTags()).toContain('h5_参数');
+  });
+
+  it('plain: bracket tag category kept when lineStripPattern strips the bracket token', () => {
+    const { entries, parser } = collect(TALKER, '\\[GoRouter\\]');
+    parser.processOutput('[GoRouter] hello\n');
+    expect(entries).toHaveLength(1);
+    expect(entries[0].category).toBe('gorouter');
+  });
+
+  it('block: bracket tag on 2nd content line still sets dynamic category', () => {
+    const { entries, parser } = collect();
+    parser.processOutput(
+      '┌──────────\n│ \n│ [logpath] routed request\n└──────────\n',
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0].category).toBe('logpath');
+    expect(parser.getKnownTags()).toContain('logpath');
+  });
+
+  it('plain: GoRouter-style tree lines inherit prior [GoRouter] category', () => {
+    const { entries, parser } = collect();
+    parser.processOutput(
+      '[GoRouter] setting initial location /login_page\n' +
+        '[GoRouter] Full paths for routes:\n' +
+        '├─/ (Widget)\n' +
+        '│ └─/login_page (Widget)\n',
+    );
+    expect(entries).toHaveLength(4);
+    entries.forEach((e) => expect(e.category).toBe('gorouter'));
+    expect(parser.getKnownTags()).toContain('gorouter');
+  });
+
+  it('plain: ASCII-pipe prefixed tree lines inherit [GoRouter] category', () => {
+    const { entries, parser } = collect();
+    parser.processOutput(
+      '[GoRouter] Full paths for routes:\n' +
+        '| ├─/ (Widget)\n' +
+        '| └─/login_page (Widget)\n',
+    );
+    expect(entries).toHaveLength(3);
+    entries.forEach((e) => expect(e.category).toBe('gorouter'));
+  });
+
+  it('plain: "| #n stack" lines do not inherit [GoRouter]; sticky tag clears', () => {
+    const { entries, parser } = collect();
+    parser.processOutput(
+      '[GoRouter] msg\n' +
+        '| #1 StatefulElement.build (framework.dart:1:1)\n' +
+        'plain after stack\n',
+    );
+    expect(entries).toHaveLength(3);
+    expect(entries[0].category).toBe('gorouter');
+    expect(entries[1].category).not.toBe('gorouter');
+    expect(entries[2].category).toBe('info');
   });
 
   it('CRITICAL keyword → category=critical', () => {

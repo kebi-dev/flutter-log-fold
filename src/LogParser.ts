@@ -11,7 +11,8 @@ const FLUTTER_LOG_PREFIX = /^flutter:\s?/;
 /** Lines from flutter run / VS Code that lack I/flutter or flutter: — not Android log spam. */
 const FLUTTER_TOOLING_LINE =
   /^(Launching\s|✓\s+Built\s|Built\s|Running Gradle task\b|Installing\b|Uninstalling\b|Error\s+launching\s+application\b|Flutter run key commands|The Flutter DevTools|Dart VM Service|Connecting to VM Service|Waiting for connection from debug service|A Dart VM Service on\s|Syncing files to device\b|Could not find Dart in your PATH)/i;
-const TAG_REGEX = /\[([a-zA-Z][a-zA-Z0-9]*?)(?:-[^\]]*)??\]/;
+/** `[asciiBase-suffix]` → category groups under `asciibase`; full formatter keys stay hyphenated. */
+const TALKER_TAG_SPLIT = /^([a-zA-Z][a-zA-Z0-9_]*)-(.+)$/;
 
 interface CategoryRule {
   category: LogCategory;
@@ -39,6 +40,8 @@ export class LogParser {
   private blockDisplayBuffer: string[] = [];
   private blockDetectBuffer: string[] = [];
   private blockSource: LogSource = 'flutter';
+  /** Plain `[Tag]` line category carried onto following tree/indented lines (GoRouter dumps, etc.). */
+  private lastBracketTaggedPlainCategory: LogCategory | null = null;
   private patterns: BlockPatterns;
   private lineStripRegex: RegExp | null = null;
   private blockPrefixRegex: RegExp | null = null;
@@ -156,8 +159,10 @@ export class LogParser {
       }
     }
 
-    // lineStripPattern on detection line only
+    // lineStripPattern on detection line only — capture `[tag]` before strip so regex cannot erase categories
+    let bracketBeforeStripCategory: LogCategory | null = null;
     if (this.lineStripRegex) {
+      bracketBeforeStripCategory = this.tryBracketTagCategory(detectLine);
       detectLine = detectLine.replace(this.lineStripRegex, '');
     }
 
@@ -171,6 +176,7 @@ export class LogParser {
       if (this.inBlock && this.blockDisplayBuffer.length > 0) {
         this.emitBlock();
       }
+      this.lastBracketTaggedPlainCategory = null;
       this.inBlock = true;
       this.blockDisplayBuffer = [displayLine];
       this.blockDetectBuffer = [detectLine];
@@ -182,7 +188,7 @@ export class LogParser {
       // Line from a different source (e.g. W/BillingClient during I/flutter block)
       // — emit as standalone plain log, don't pollute the block buffer
       if (source !== this.blockSource) {
-        this.emitPlain(displayLine, detectLine, source);
+        this.emitPlain(displayLine, detectLine, source, bracketBeforeStripCategory);
         return;
       }
 
@@ -203,15 +209,13 @@ export class LogParser {
     }
 
     // Plain line
-    this.emitPlain(displayLine, detectLine, source);
+    this.emitPlain(displayLine, detectLine, source, bracketBeforeStripCategory);
   }
 
   private emitBlock(): void {
     const { detect: cleanLines, display: displayLines } =
       this.cleanBlockLines(this.blockDetectBuffer, this.blockDisplayBuffer);
-    // For blocks: scan first content line for tag pattern
-    const firstLine = cleanLines.length > 0 ? cleanLines[0] : '';
-    const category = this.detectCategory(firstLine);
+    const category = this.detectCategoryForBlock(cleanLines);
     const formatted = this.formatBlockSummary(cleanLines);
     const summary = formatted ?? this.extractSummary(cleanLines);
 
@@ -229,10 +233,56 @@ export class LogParser {
     this.inBlock = false;
     this.blockDisplayBuffer = [];
     this.blockDetectBuffer = [];
+    this.lastBracketTaggedPlainCategory = null;
     this.onEntry(entry);
   }
 
-  private emitPlain(displayLine: string, detectLine: string, source: LogSource): void {
+  /**
+   * Lines like GoRouter route trees: no `[Tag]`, but box-drawing / tree arms continue the prior tagged log.
+   */
+  private isBracketTaggedContinuationLine(line: string): boolean {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) {
+      return false;
+    }
+    if (/^#\d+\s/.test(trimmed)) {
+      return false;
+    }
+    // Stack frames often render as "| #0 Foo.bar ..." — must not inherit e.g. [GoRouter]
+    if (/^\|\s*#\d+\s/.test(trimmed)) {
+      return false;
+    }
+    // Unicode box-drawing block + common ASCII tree chars used by GoRouter / Flutter dumps
+    if (/^[\u2500-\u257f├└│┌┐┘─]/.test(trimmed)) {
+      return true;
+    }
+    // ASCII '|' column/tree prefixes (after excluding "| #n" stacks above)
+    return trimmed.startsWith('|');
+  }
+
+  private emitPlain(
+    displayLine: string,
+    detectLine: string,
+    source: LogSource,
+    bracketBeforeStripCategory: LogCategory | null = null,
+  ): void {
+    const postBracket = this.tryBracketTagCategory(detectLine);
+    const bracketCat = postBracket !== null ? postBracket : bracketBeforeStripCategory;
+    let category: LogCategory;
+
+    if (bracketCat !== null) {
+      category = bracketCat;
+      this.lastBracketTaggedPlainCategory = bracketCat;
+    } else if (
+      this.isBracketTaggedContinuationLine(detectLine) &&
+      this.lastBracketTaggedPlainCategory !== null
+    ) {
+      category = this.lastBracketTaggedPlainCategory;
+    } else {
+      category = this.detectCategory(detectLine);
+      this.lastBracketTaggedPlainCategory = null;
+    }
+
     const summaryText = detectLine.length > MAX_SUMMARY_LENGTH
       ? detectLine.substring(0, MAX_SUMMARY_LENGTH) + '...'
       : detectLine;
@@ -243,47 +293,84 @@ export class LogParser {
       timestamp: formatTimestamp(),
       summary: summaryText,
       lines: [displayLine],
-      category: this.detectCategory(detectLine),
+      category,
       source,
     };
     this.onEntry(entry);
   }
 
-  private detectCategory(text: string): LogCategory {
-    // Phase 1: Scan first 100 chars for [tag] or [tag-something] pattern
+  /** Category / filter key: Talker `[base-suffix]` → `base`; `[H5 参数]` → `h5_参数`. */
+  private normalizeBracketTagForCategory(raw: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return '';
+    }
+    const m = TALKER_TAG_SPLIT.exec(trimmed);
+    if (m) {
+      return m[1].toLowerCase();
+    }
+    return trimmed.toLowerCase().replace(/\s+/g, '_');
+  }
+
+  /** Formatter registry key: lowercase, spaces → underscores; keeps hyphenated Talker names. */
+  private normalizeBracketTagForFormatter(raw: string): string {
+    return raw.trim().toLowerCase().replace(/\s+/g, '_');
+  }
+
+  /**
+   * Bracket tag at start of scanned segment, or null if none.
+   */
+  private tryBracketTagCategory(text: string): LogCategory | null {
     const scanText = text.substring(0, TAG_SCAN_LIMIT);
-    const tagMatch = scanText.match(TAG_REGEX);
-
-    if (tagMatch) {
-      const tagName = tagMatch[1].toLowerCase();
-
-      // Phase 2: If tag matches a severity level, return that severity
-      if (severitySet.has(tagName)) {
-        return tagName;
-      }
-
-      // Phase 3: Return as dynamic tag
-      this.knownTags.add(tagName);
+    const tagMatch = scanText.match(/\[([^\]]+)\]/);
+    if (!tagMatch) {
+      return null;
+    }
+    const tagName = this.normalizeBracketTagForCategory(tagMatch[1]);
+    if (!tagName) {
+      return null;
+    }
+    if (severitySet.has(tagName)) {
       return tagName;
     }
+    this.knownTags.add(tagName);
+    return tagName;
+  }
 
-    // Phase 4: Fall back to keyword-based severity rules
+  /** Tags are often on the 2nd+ content line after a blank or separator — scan the whole block. */
+  private detectCategoryForBlock(cleanLines: string[]): LogCategory {
+    for (const line of cleanLines) {
+      const fromTag = this.tryBracketTagCategory(line);
+      if (fromTag !== null) {
+        return fromTag;
+      }
+    }
+    const firstLine = cleanLines.length > 0 ? cleanLines[0] : '';
+    return this.detectCategory(firstLine);
+  }
+
+  private detectCategory(text: string): LogCategory {
+    const fromTag = this.tryBracketTagCategory(text);
+    if (fromTag !== null) {
+      return fromTag;
+    }
+
     for (const rule of CATEGORY_RULES) {
       if (rule.keywords.test(text)) {
         return rule.category;
       }
     }
 
-    // Phase 5: Default
     return 'info';
   }
 
   private formatBlockSummary(cleanLines: string[]): string | null {
     if (cleanLines.length < 1) { return null; }
     const header = cleanLines[0].trim();
-    const tagMatch = header.match(/^\[([a-zA-Z][a-zA-Z0-9]*(?:-[^\]]*)?)\]/);
+    const tagMatch = header.match(/^\[([^\]]+)\]/);
     if (!tagMatch) { return null; }
-    return this.registry.format(tagMatch[1].toLowerCase(), cleanLines);
+    const formatterKey = this.normalizeBracketTagForFormatter(tagMatch[1]);
+    return this.registry.format(formatterKey, cleanLines);
   }
 
   private cleanBlockLines(

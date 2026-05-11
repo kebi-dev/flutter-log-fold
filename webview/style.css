@@ -44,44 +44,133 @@ body {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px;
-  padding-right: 8px;
-  margin-right: 4px;
+  gap: 2px;
+  padding-right: 6px;
+  margin-right: 2px;
   border-right: 1px solid var(--vscode-panel-border);
 }
 
-.toolbar button {
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
+/* VS Code–style icon toolbar (panel / list actions) */
+.toolbar-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  margin: 0;
   border: none;
-  padding: 3px 8px;
+  border-radius: 5px;
   cursor: pointer;
-  font-size: 11px;
-  border-radius: 2px;
+  background: transparent;
+  color: var(--vscode-icon-foreground);
+  outline-offset: -1px;
 }
 
-.toolbar button:hover {
-  background: var(--vscode-button-hoverBackground);
+.toolbar-btn-icon .codicon {
+  font-size: 16px;
 }
 
-.toolbar button.toolbar-btn-accent {
-  font-weight: 600;
-  border: 1px solid var(--vscode-button-border, transparent);
+.toolbar-btn-icon:hover {
+  background-color: var(--vscode-toolbar-hoverBackground);
 }
 
-.toolbar button.toolbar-btn-accent:hover {
-  background: var(--vscode-button-hoverBackground);
+.toolbar-btn-icon:active {
+  background-color: var(--vscode-toolbar-activeBackground);
 }
 
-#input-filter {
+.toolbar-btn-icon:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.toolbar-btn-icon:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+
+.filter-find-cluster {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-input-wrap {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 80px;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px 0 6px;
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
   border: 1px solid var(--vscode-input-border, transparent);
-  padding: 3px 6px;
+  border-radius: 2px;
+}
+
+.filter-input-wrap:focus-within {
+  border-color: var(--vscode-focusBorder);
+}
+
+.filter-input-glyph {
+  flex-shrink: 0;
+  opacity: 0.72;
+  font-size: 14px;
+}
+
+.filter-find-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.filter-find-nav[hidden] {
+  display: none !important;
+}
+
+.filter-match-counter {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+  min-width: 4.5em;
+  text-align: right;
+  padding-right: 2px;
+}
+
+.filter-find-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+}
+
+#input-filter {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 2px 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--vscode-input-foreground);
   font-size: 12px;
   font-family: inherit;
-  flex: 1;
-  min-width: 80px;
+}
+
+mark.filter-match {
+  background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.28));
+  color: inherit;
+  padding: 0;
+}
+
+mark.filter-match.filter-match-current {
+  background: var(--vscode-editor-findMatchBackground, rgba(234, 92, 0, 0.45));
+  outline: 1px solid var(--vscode-editor-findMatchBorder, rgba(255, 255, 255, 0.22));
+  outline-offset: -1px;
 }
 
 #input-filter::placeholder {
@@ -90,7 +179,7 @@ body {
 
 .counter {
   font-size: 11px;
-  opacity: 0.7;
+  color: var(--vscode-descriptionForeground);
   white-space: nowrap;
   margin-left: auto;
 }
@@ -120,11 +209,104 @@ body {
 
 .chip-bar {
   display: flex;
-  gap: 3px;
-  flex-wrap: nowrap;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   min-height: 28px;
   padding-bottom: 2px;
+}
+
+.chip-mutex-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.chip-bar-row-level {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.chip-filter-group {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.chip-dynamic-section {
+  width: 100%;
+  min-width: 0;
+}
+
+.chip-dynamic-section:has(.chip-dynamic-group:empty) {
+  display: none;
+}
+
+.chip-dynamic-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  width: 100%;
+}
+
+.chip-dynamic-group .chip.chip-filter-option {
+  flex-shrink: 0;
+}
+
+.chip-filter-group::-webkit-scrollbar {
+  height: 4px;
+}
+
+.chip-filter-group::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background);
+  border-radius: 2px;
+}
+
+/* Mutex level/tag filter layout (selected vs idle styling below, after category palette) */
+.chip.chip-filter-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 11px;
+  flex-shrink: 0;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease,
+    border-color 0.14s ease,
+    opacity 0.14s ease,
+    box-shadow 0.14s ease;
+}
+
+.chip.chip-filter-option:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.chip.chip-filter-option .chip-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.chip.chip-filter-option .chip-label {
+  line-height: 1.2;
+  user-select: none;
 }
 
 .chip {
@@ -160,6 +342,16 @@ body {
 }
 
 .chip-toggle:not(.active) .chip-label {
+  opacity: 0.72;
+}
+
+.chip-toggle .chip-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.chip-toggle:not(.active) .chip-icon {
   opacity: 0.72;
 }
 
@@ -199,17 +391,12 @@ body.vscode-high-contrast .chip-toggle .chip-thumb {
   box-shadow: inset 0 0 0 1px var(--vscode-contrastBorder, CanvasText);
 }
 
-.chip.active:not(.chip-toggle) {
+.chip.active:not(.chip-toggle):not(.chip-filter-option) {
   opacity: 1;
   border-color: var(--vscode-panel-border);
 }
 
 /* Chip category colors */
-.chip[data-category="all"] {
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
-}
-
 .chip[data-category="error"] {
   background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
   color: var(--vscode-inputValidation-errorForeground, var(--vscode-errorForeground, #f48771));
@@ -238,6 +425,96 @@ body.vscode-high-contrast .chip-toggle .chip-thumb {
 .chip[data-category="critical"] {
   background: #d63031;
   color: #fff;
+}
+
+/* Mutex chips: idle = muted neutral + dashed edge; active = solid ring + full saturation */
+.chip.chip-filter-option:not(.active) {
+  background: var(--vscode-input-background) !important;
+  color: var(--vscode-descriptionForeground) !important;
+  border: 1px dashed color-mix(in srgb, var(--vscode-descriptionForeground) 32%, transparent) !important;
+  opacity: 0.92;
+  box-shadow: none;
+}
+
+.chip.chip-filter-option:not(.active) .chip-icon {
+  opacity: 0.58 !important;
+}
+
+.chip.chip-filter-option:not(.active):hover {
+  background: var(--vscode-list-hoverBackground) !important;
+  color: var(--vscode-editor-foreground) !important;
+  border-style: dashed !important;
+}
+
+.chip.chip-filter-option:not(.active):hover .chip-icon {
+  opacity: 0.85 !important;
+}
+
+.chip.chip-filter-option.active {
+  opacity: 1 !important;
+  border-style: solid !important;
+  border-width: 2px !important;
+  border-color: var(--vscode-focusBorder) !important;
+  font-weight: 800 !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 55%, transparent),
+    0 2px 6px color-mix(in srgb, var(--vscode-editor-foreground) 18%, transparent);
+}
+
+.chip.chip-filter-option.active .chip-icon {
+  opacity: 1 !important;
+}
+
+.chip.chip-filter-option.active[data-category='all'] {
+  background: var(--vscode-button-background) !important;
+  color: var(--vscode-button-foreground) !important;
+}
+
+.chip.chip-filter-option.active[data-category='error'] {
+  background: var(--vscode-inputValidation-errorBackground, #5a1d1d) !important;
+  color: var(--vscode-inputValidation-errorForeground, var(--vscode-errorForeground, #f48771)) !important;
+}
+
+.chip.chip-filter-option.active[data-category='warn'] {
+  background: var(--vscode-inputValidation-warningBackground, #5a4a1d) !important;
+  color: var(--vscode-inputValidation-warningForeground, var(--vscode-editorWarning-foreground, #cca700)) !important;
+}
+
+.chip.chip-filter-option.active[data-category='info'] {
+  background: var(--vscode-inputValidation-infoBackground, #1d3a5a) !important;
+  color: var(--vscode-inputValidation-infoForeground, var(--vscode-editorInfo-foreground, #75beff)) !important;
+}
+
+.chip.chip-filter-option.active[data-category='debug'] {
+  background: var(--flf-badge-debug-bg, #a29bfe) !important;
+  color: #fff !important;
+}
+
+.chip.chip-filter-option.active[data-category='verbose'] {
+  background: var(--flf-badge-verbose-bg, #636e72) !important;
+  color: #fff !important;
+}
+
+.chip.chip-filter-option.active[data-category='critical'] {
+  background: #d63031 !important;
+  color: #fff !important;
+}
+
+.chip.chip-filter-option.chip-dynamic-tag.active {
+  border-style: solid !important;
+  filter: none !important;
+  box-shadow:
+    0 0 0 2px var(--vscode-focusBorder),
+    0 2px 6px color-mix(in srgb, var(--vscode-editor-foreground) 18%, transparent) !important;
+}
+
+body.vscode-high-contrast .chip.chip-filter-option:not(.active) {
+  border-width: 2px !important;
+}
+
+body.vscode-high-contrast .chip.chip-filter-option.active {
+  outline: 2px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  outline-offset: 1px;
 }
 
 .chip-separator {
@@ -283,6 +560,14 @@ body.vscode-high-contrast .chip-toggle .chip-thumb {
 }
 
 .log-entry:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.log-entry.log-entry-selected {
+  background: var(--vscode-list-inactiveSelectionBackground);
+}
+
+.log-entry.log-entry-selected:hover {
   background: var(--vscode-list-hoverBackground);
 }
 

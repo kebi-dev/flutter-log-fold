@@ -8,19 +8,66 @@
   const filterInput = /** @type {HTMLInputElement} */ (document.getElementById('input-filter'));
   const counterEl = /** @type {HTMLElement} */ (document.getElementById('counter'));
   const chipBar = /** @type {HTMLElement} */ (document.getElementById('chip-bar'));
+  const chipFilterGroup = /** @type {HTMLElement} */ (document.getElementById('chip-filter-group'));
+  const chipDynamicGroup = /** @type {HTMLElement} */ (document.getElementById('chip-dynamic-group'));
   const btnClear = /** @type {HTMLElement} */ (document.getElementById('btn-clear'));
   const btnCollapse = /** @type {HTMLElement} */ (document.getElementById('btn-collapse'));
   const btnExpand = /** @type {HTMLElement} */ (document.getElementById('btn-expand'));
   const btnNewViewer = /** @type {HTMLElement} */ (document.getElementById('btn-new-viewer'));
   const chipSystem = /** @type {HTMLElement} */ (document.getElementById('chip-system'));
-  const chipSeparator = /** @type {HTMLElement} */ (document.getElementById('chip-separator'));
+  const filterFindNav = /** @type {HTMLElement} */ (document.getElementById('filter-find-nav'));
+  const filterMatchCounter = /** @type {HTMLElement} */ (document.getElementById('filter-match-counter'));
+  const btnFilterPrev = /** @type {HTMLButtonElement} */ (document.getElementById('btn-filter-prev'));
+  const btnFilterNext = /** @type {HTMLButtonElement} */ (document.getElementById('btn-filter-next'));
 
-  const SEVERITY_LEVELS = ['info', 'error', 'warn', 'debug', 'verbose', 'critical'];
+  /** Ordered least → most severe; selecting a chip shows this level and more severe (plus ALL for everything). */
+  const THRESHOLD_ORDER = ['verbose', 'debug', 'info', 'warn', 'error', 'critical'];
 
-  /** @type {Map<string, boolean>} */
-  const activeCategories = new Map([
-    ['all', true],
-  ]);
+  /** @type {Set<string>} */
+  const dynamicFilterChipsAdded = new Set();
+
+  /** Exactly one mode: all | minimum severity | single dynamic tag */
+  let filterMode = 'all';
+
+  /**
+   * @param {unknown} c
+   * @returns {string}
+   */
+  function normalizeCategoryKey(c) {
+    if (c === undefined || c === null) {
+      return 'info';
+    }
+    const s = String(c).trim().toLowerCase();
+    if (!s) {
+      return 'info';
+    }
+    return s === 'warning' ? 'warn' : s;
+  }
+
+  /**
+   * @param {unknown} raw
+   * @returns {string}
+   */
+  function normalizeFilterMode(raw) {
+    if (raw === undefined || raw === null) {
+      return 'all';
+    }
+    const s = String(raw).trim().toLowerCase();
+    if (!s || s === 'all') {
+      return 'all';
+    }
+    return s === 'warning' ? 'warn' : s;
+  }
+
+  /** Codicon class per severity / preset chip (matches VS Code Problems / debug metaphors). */
+  const CHIP_CODICONS = {
+    info: 'codicon-info',
+    error: 'codicon-error',
+    warn: 'codicon-warning',
+    debug: 'codicon-bug',
+    verbose: 'codicon-output',
+    critical: 'codicon-flame',
+  };
 
   let showSystemLogs = false;
   let collapseByDefault = true;
@@ -29,64 +76,138 @@
   let visibleCount = 0;
   let filterText = '';
 
-  // ── Initialize severity chips ──
+  /** @type {HTMLElement[]} */
+  let filterMatches = [];
+  let filterMatchIndex = -1;
+  let findHighlightTimer = null;
+  /** Last successful filter text used for highlights (trimmed). Used to detect query changes vs DOM-only refreshes. */
+  let lastFindHighlightQuery = '';
+  /** Row the user chose (persists across expand/collapse and highlight rebuilds). */
+  /** @type {HTMLElement | null} */
+  let selectedLogEntry = null;
 
-  function initChips() {
-    for (const sev of SEVERITY_LEVELS) {
-      createChipElement(sev, true);
-      activeCategories.set(sev, true);
-    }
+  /**
+   * @param {string} category
+   * @returns {boolean}
+   */
+  function isStandardSeverity(category) {
+    return THRESHOLD_ORDER.indexOf(category) !== -1;
   }
 
   /**
-   * Create a chip button element and insert it before the separator.
-   * @param {string} category
-   * @param {boolean} isSeverity
+   * @param {string} entryCategory
+   * @param {string} mode
+   * @returns {boolean}
    */
-  function createChipElement(category, isSeverity) {
+  function entryMatchesFilterMode(entryCategory, mode) {
+    const cat = normalizeCategoryKey(entryCategory);
+    const m = mode === 'all' ? 'all' : normalizeFilterMode(mode);
+    if (m === 'all') {
+      return true;
+    }
+    const thrIdx = THRESHOLD_ORDER.indexOf(m);
+    if (thrIdx >= 0) {
+      let effectiveIdx = THRESHOLD_ORDER.indexOf(cat);
+      // Bracket tags like gorouter / urlparser are not severity levels; treat them as ~info so
+      // VERBOSE/DEBUG/INFO chips still show them (fixes “everything disappears” vs severity mutex).
+      if (effectiveIdx < 0) {
+        effectiveIdx = THRESHOLD_ORDER.indexOf('info');
+      }
+      return effectiveIdx >= thrIdx;
+    }
+    return cat === m;
+  }
+
+  /**
+   * Tooltip for mutex severity / ALL chips.
+   * @param {string} category
+   * @returns {string}
+   */
+  function mutexChipTitle(category) {
+    if (category === 'all') {
+      return 'Show all logs (all levels and tags)';
+    }
+    const thrIdx = THRESHOLD_ORDER.indexOf(category);
+    if (thrIdx >= 0) {
+      const rest = THRESHOLD_ORDER.slice(thrIdx);
+      return 'Minimum severity: ' + category + ' — shows ' + rest.join(', ');
+    }
+    return 'Show only logs with tag [' + category + ']';
+  }
+
+  /**
+   * Mutex filter chip (radio): ALL, severity thresholds, or dynamic tag.
+   * @param {string} category
+   * @param {'all' | 'severity' | 'dynamic'} kind
+   */
+  function createMutexFilterChip(category, kind) {
+    const key = normalizeCategoryKey(category === 'all' ? 'all' : category);
     const chip = document.createElement('button');
     chip.type = 'button';
-    chip.className = 'chip chip-toggle active';
-    chip.dataset.category = category;
-    chip.setAttribute('role', 'switch');
-    chip.setAttribute('aria-checked', 'true');
-    chip.setAttribute('aria-label', 'Show ' + category + ' logs');
+    chip.className = 'chip chip-filter-option';
+    chip.dataset.category = kind === 'all' ? 'all' : key;
+    chip.setAttribute('role', 'radio');
+    chip.setAttribute('aria-checked', 'false');
+
+    let iconClass = 'codicon-tag';
+    if (kind === 'all') {
+      iconClass = 'codicon-list-flat';
+    } else if (kind === 'severity') {
+      iconClass = CHIP_CODICONS[key] || 'codicon-symbol-misc';
+    }
+
+    const icon = document.createElement('span');
+    icon.className = 'codicon chip-icon ' + iconClass;
+    icon.setAttribute('aria-hidden', 'true');
 
     const label = document.createElement('span');
     label.className = 'chip-label';
-    label.textContent = category.toUpperCase();
+    label.textContent = (kind === 'all' ? 'all' : key).toUpperCase();
 
-    const track = document.createElement('span');
-    track.className = 'chip-track';
-    track.setAttribute('aria-hidden', 'true');
-    const thumb = document.createElement('span');
-    thumb.className = 'chip-thumb';
-    track.appendChild(thumb);
-
+    chip.appendChild(icon);
     chip.appendChild(label);
-    chip.appendChild(track);
 
-    if (!isSeverity) {
-      const hue = hashStringToHue(category);
-      const bg = 'hsl(' + hue + ', 55%, 35%)';
-      chip.style.background = bg;
+    if (kind === 'dynamic') {
+      chip.classList.add('chip-dynamic-tag');
+      const hue = hashStringToHue(key);
+      chip.style.background = 'hsl(' + hue + ', 55%, 35%)';
       chip.style.color = '#fff';
     }
 
-    chipBar.insertBefore(chip, chipSeparator);
+    const titleCat = kind === 'all' ? 'all' : key;
+    const tip =
+      mutexChipTitle(titleCat) +
+      (kind === 'all' ? '' : ' · Click again while active to show all');
+    chip.title = tip;
+    chip.setAttribute('aria-label', tip);
+
+    (kind === 'dynamic' ? chipDynamicGroup : chipFilterGroup).appendChild(chip);
+  }
+
+  function initChipBar() {
+    createMutexFilterChip('all', 'all');
+    for (const sev of THRESHOLD_ORDER) {
+      createMutexFilterChip(sev, 'severity');
+    }
+    filterMode = 'all';
+    updateChipUI();
   }
 
   /**
-   * Ensure a chip exists for a category. Creates a dynamic chip if needed.
+   * Add a mutex chip for a dynamic `[tag]` category (not a standard severity).
    * @param {string} category
    */
-  function ensureChip(category) {
-    if (activeCategories.has(category)) { return; }
-    // New dynamic tag
-    activeCategories.set(category, true);
-    createChipElement(category, false);
-    // Update ALL chip state
-    syncAllChip();
+  function ensureCategoryAndChip(category) {
+    const cat = normalizeCategoryKey(category || 'info');
+    if (cat === 'all' || isStandardSeverity(cat)) {
+      return;
+    }
+    if (dynamicFilterChipsAdded.has(cat)) {
+      return;
+    }
+    dynamicFilterChipsAdded.add(cat);
+    createMutexFilterChip(cat, 'dynamic');
+    updateChipUI();
   }
 
   /**
@@ -102,7 +223,7 @@
     return ((hash % 360) + 360) % 360;
   }
 
-  initChips();
+  initChipBar();
 
   // ── Smart auto-scroll ──
   let userAtBottom = true;
@@ -138,6 +259,76 @@
     const col = parseInt(link.dataset.column || '1', 10);
     if (!pkg || !rel) { return; }
     vscode.postMessage({ command: 'openDartLocation', packageName: pkg, relativePath: rel, line, column: col });
+  });
+
+  container.addEventListener(
+    'toggle',
+    () => {
+      scheduleRefreshFindHighlights();
+    },
+    true,
+  );
+
+  /**
+   * @param {HTMLElement | null} entry
+   */
+  function setSelectedLogEntry(entry) {
+    if (selectedLogEntry === entry) {
+      return;
+    }
+    if (selectedLogEntry) {
+      selectedLogEntry.classList.remove('log-entry-selected');
+    }
+    selectedLogEntry = entry;
+    if (selectedLogEntry) {
+      selectedLogEntry.classList.add('log-entry-selected');
+    }
+  }
+
+  /**
+   * @param {HTMLElement} entry
+   * @param {HTMLElement} target
+   */
+  function handleLogEntryClick(entry, target) {
+    flushPendingFindRefresh();
+    setSelectedLogEntry(entry);
+
+    const q = filterInput.value.trim();
+    if (!q || filterMatches.length === 0) {
+      updateFindNavUI();
+      return;
+    }
+
+    const clickedMark = /** @type {HTMLElement | null} */ (target.closest('mark.filter-match'));
+    let newIdx = -1;
+    if (clickedMark) {
+      newIdx = filterMatches.indexOf(clickedMark);
+    }
+    if (newIdx < 0) {
+      newIdx = firstGlobalMatchIndexInEntry(entry);
+    }
+    if (newIdx >= 0) {
+      filterMatches.forEach((m) => m.classList.remove('filter-match-current'));
+      filterMatchIndex = newIdx;
+      filterMatches[newIdx].classList.add('filter-match-current');
+    }
+    updateFindNavUI();
+  }
+
+  // Bubble phase: row selection + optional jump to match on that row (dart links use capture + stopPropagation).
+  container.addEventListener('click', (e) => {
+    const target = /** @type {HTMLElement | null} */ (e.target instanceof Element ? /** @type {HTMLElement} */ (e.target) : null);
+    if (!target || !container.contains(target)) {
+      return;
+    }
+    if (target.closest('.dart-source-link')) {
+      return;
+    }
+    const entry = /** @type {HTMLElement | null} */ (target.closest('.log-entry'));
+    if (!entry || entry.classList.contains('hidden')) {
+      return;
+    }
+    handleLogEntryClick(entry, target);
   });
 
   // ── ANSI → HTML converter ──
@@ -465,7 +656,7 @@
       case 'batch':
         if (message.knownTags) {
           for (const tag of message.knownTags) {
-            ensureChip(tag);
+            ensureCategoryAndChip(tag);
           }
         }
         addBatch(message.entries);
@@ -508,6 +699,27 @@
     applyFilters();
   });
 
+  btnFilterPrev.addEventListener('click', () => {
+    navigateFilterMatch(-1);
+  });
+
+  btnFilterNext.addEventListener('click', () => {
+    navigateFilterMatch(1);
+  });
+
+  window.addEventListener('keydown', (e) => {
+    const q = filterInput.value.trim();
+    if (!q || filterMatches.length === 0) { return; }
+    const mod = e.metaKey || e.ctrlKey;
+    if (!mod || e.key !== 'g' || e.altKey) { return; }
+    e.preventDefault();
+    if (e.shiftKey) {
+      navigateFilterMatch(-1);
+    } else {
+      navigateFilterMatch(1);
+    }
+  });
+
   // ── System logs toggle ──
 
   chipSystem.addEventListener('click', () => {
@@ -525,38 +737,33 @@
   // ── Chip bar (category chips only) ──
 
   chipBar.addEventListener('click', (e) => {
-    const chip = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.chip[data-category]'));
-    if (!chip) { return; }
-
-    const category = chip.dataset.category;
-    if (!category) { return; }
-
-    if (category === 'all') {
-      const isActive = activeCategories.get('all');
-      const newState = !isActive;
-      activeCategories.forEach((_v, key) => {
-        activeCategories.set(key, newState);
-      });
-    } else {
-      const current = activeCategories.get(category) || false;
-      activeCategories.set(category, !current);
-      syncAllChip();
+    const chip = /** @type {HTMLElement | null} */ (
+      /** @type {HTMLElement} */ (e.target).closest('.chip-filter-option[data-category]')
+    );
+    if (!chip) {
+      return;
     }
 
+    const category = chip.dataset.category;
+    if (!category) {
+      return;
+    }
+
+    const next = normalizeFilterMode(category);
+    const current = normalizeFilterMode(filterMode);
+    if (next === current) {
+      if (next !== 'all') {
+        filterMode = 'all';
+        updateChipUI();
+        applyFilters();
+        focusMutexChipByCategory('all');
+      }
+      return;
+    }
+    filterMode = next;
     updateChipUI();
     applyFilters();
   });
-
-  /**
-   * Sync the ALL chip based on whether all non-all categories are active.
-   */
-  function syncAllChip() {
-    let allActive = true;
-    activeCategories.forEach((v, key) => {
-      if (key !== 'all' && !v) { allActive = false; }
-    });
-    activeCategories.set('all', allActive);
-  }
 
   // ── Rendering ──
 
@@ -577,7 +784,7 @@
    */
   function addEntry(entry) {
     normalizeEntry(entry);
-    ensureChip(entry.category);
+    ensureCategoryAndChip(entry.category);
     totalCount++;
     const el = createEntryElement(entry);
     container.appendChild(el);
@@ -596,6 +803,7 @@
     const isVisible = applyFilterToElement(el, entry);
     if (isVisible) { visibleCount++; }
     updateCounter(visibleCount);
+    scheduleRefreshFindHighlights();
     autoScroll();
   }
 
@@ -609,7 +817,7 @@
     const fragment = document.createDocumentFragment();
     for (const entry of entries) {
       normalizeEntry(entry);
-      ensureChip(entry.category);
+      ensureCategoryAndChip(entry.category);
       totalCount++;
       const el = createEntryElement(entry);
       fragment.appendChild(el);
@@ -620,11 +828,28 @@
   }
 
   function clearAll() {
+    if (findHighlightTimer !== null) {
+      clearTimeout(findHighlightTimer);
+      findHighlightTimer = null;
+    }
+    setSelectedLogEntry(null);
+    lastFindHighlightQuery = '';
     container.innerHTML = '';
     totalCount = 0;
     visibleCount = 0;
     userAtBottom = true;
+    filterMatches = [];
+    filterMatchIndex = -1;
+    resetDynamicFilterChips();
     updateCounter(0);
+    updateFindNavUI();
+  }
+
+  function resetDynamicFilterChips() {
+    dynamicFilterChipsAdded.clear();
+    chipDynamicGroup.innerHTML = '';
+    filterMode = 'all';
+    updateChipUI();
   }
 
   /**
@@ -634,7 +859,8 @@
   function createEntryElement(entry) {
     const div = document.createElement('div');
     div.className = `log-entry ${entry.type === 'plain' ? 'plain' : 'block'}`;
-    div.dataset.category = entry.category;
+    const catKey = normalizeCategoryKey(entry.category);
+    div.dataset.category = catKey;
     div.dataset.source = entry.source || 'flutter';
     // Search text: ANSI-stripped
     const rawText = (entry.lines || []).join('\n');
@@ -643,7 +869,7 @@
     if (entry.type === 'plain') {
       const main = document.createElement('div');
       main.className = 'log-entry-main';
-      const badge = createBadge(entry.category);
+      const badge = createBadge(catKey);
       main.appendChild(badge);
       const textSpan = document.createElement('span');
       textSpan.className = 'log-entry-text';
@@ -666,7 +892,7 @@
       arrow.className = 'arrow';
       arrow.textContent = '\u25B6';
 
-      const badge = createBadge(entry.category);
+      const badge = createBadge(catKey);
 
       const timestamp = document.createElement('span');
       timestamp.className = 'timestamp';
@@ -677,7 +903,7 @@
       const firstLine = (entry.lines && entry.lines[0]) || '';
       var sumFull = entry.summary || '';
       var maxCollapsed =
-        entry.category === 'error' || entry.category === 'critical'
+        catKey === 'error' || catKey === 'critical'
           ? COLLAPSED_SUMMARY_MAX_ERROR
           : COLLAPSED_SUMMARY_MAX_DEFAULT;
       var sumShown = ellipsisCollapsedSummary(sumFull, maxCollapsed);
@@ -717,7 +943,7 @@
    */
   function createBadge(category) {
     const badge = document.createElement('span');
-    const isSeverity = SEVERITY_LEVELS.indexOf(category) !== -1;
+    const isSeverity = isStandardSeverity(category);
     badge.className = 'badge' + (isSeverity ? ' ' + category : '');
     badge.textContent = category.toUpperCase();
 
@@ -731,6 +957,321 @@
     return badge;
   }
 
+  // ── Filter find (highlight & match navigation) ──
+
+  /**
+   * @param {string} s
+   * @returns {string}
+   */
+  function escapeRegex(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /**
+   * @param {HTMLElement} root
+   */
+  function stripFilterHighlights(root) {
+    root.querySelectorAll('mark.filter-match').forEach((m) => {
+      const mark = /** @type {HTMLElement} */ (m);
+      const parent = mark.parentNode;
+      if (!parent) { return; }
+      while (mark.firstChild) {
+        parent.insertBefore(mark.firstChild, mark);
+      }
+      parent.removeChild(mark);
+      /** @type {HTMLElement} */ (parent).normalize();
+    });
+  }
+
+  /**
+   * @param {Text} node
+   * @returns {boolean}
+   */
+  function textNodeInsideDartLink(node) {
+    return !!node.parentElement && !!node.parentElement.closest('.dart-source-link');
+  }
+
+  /**
+   * @param {Text} node
+   * @returns {boolean}
+   */
+  function textNodeInClosedBlockBody(node) {
+    let el = node.parentElement;
+    while (el && el !== container) {
+      if (el.classList.contains('block-content')) {
+        const det = el.closest('details');
+        if (det && !det.open) { return true; }
+      }
+      el = el.parentElement;
+    }
+    return false;
+  }
+
+  /**
+   * @param {Text} textNode
+   * @param {RegExp} regex
+   */
+  function wrapMatchesInTextNode(textNode, regex) {
+    const text = textNode.nodeValue || '';
+    regex.lastIndex = 0;
+    if (!regex.test(text)) { return; }
+    regex.lastIndex = 0;
+
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    let m;
+    while ((m = regex.exec(text)) !== null) {
+      if (m.index > last) {
+        frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      }
+      const mk = document.createElement('mark');
+      mk.className = 'filter-match';
+      mk.appendChild(document.createTextNode(m[0]));
+      frag.appendChild(mk);
+      last = m.index + m[0].length;
+      if (m[0].length === 0) {
+        regex.lastIndex++;
+      }
+    }
+    if (last < text.length) {
+      frag.appendChild(document.createTextNode(text.slice(last)));
+    }
+    const parent = textNode.parentNode;
+    if (parent) {
+      parent.replaceChild(frag, textNode);
+    }
+  }
+
+  /**
+   * @param {HTMLElement} entryEl
+   * @param {RegExp} regex
+   */
+  function highlightFilterMatchesInEntry(entryEl, regex) {
+    const walker = document.createTreeWalker(entryEl, NodeFilter.SHOW_TEXT, {
+      /** @param {Node} node */
+      acceptNode(node) {
+        const tn = /** @type {Text} */ (node);
+        if (!tn.nodeValue) { return NodeFilter.FILTER_REJECT; }
+        if (textNodeInsideDartLink(tn)) { return NodeFilter.FILTER_REJECT; }
+        if (textNodeInClosedBlockBody(tn)) { return NodeFilter.FILTER_REJECT; }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    /** @type {Text[]} */
+    const batch = [];
+    let n;
+    while ((n = walker.nextNode())) {
+      batch.push(/** @type {Text} */ (n));
+    }
+    for (const tn of batch) {
+      wrapMatchesInTextNode(tn, regex);
+    }
+  }
+
+  /**
+   * @param {HTMLElement} mark
+   * @returns {{ entry: HTMLElement; ordinal: number } | null}
+   */
+  function captureMatchPreserveContext(mark) {
+    const entry = /** @type {HTMLElement | null} */ (mark.closest('.log-entry'));
+    if (!entry) {
+      return null;
+    }
+    const inEntry = filterMatches.filter((m) => entry.contains(m));
+    const ordinal = inEntry.indexOf(mark);
+    return { entry, ordinal: ordinal >= 0 ? ordinal : 0 };
+  }
+
+  /**
+   * @param {{ entry: HTMLElement; ordinal: number }} ctx
+   * @param {HTMLElement[]} newMatches
+   * @returns {number}
+   */
+  function resolvePreservedMatchIndex(ctx, newMatches) {
+    if (!ctx.entry.isConnected || ctx.entry.classList.contains('hidden')) {
+      return -1;
+    }
+    const inEntry = newMatches.filter((m) => ctx.entry.contains(m));
+    if (inEntry.length === 0) {
+      return -1;
+    }
+    const ord = Math.min(Math.max(ctx.ordinal, 0), inEntry.length - 1);
+    return newMatches.indexOf(inEntry[ord]);
+  }
+
+  /**
+   * @param {HTMLElement} entry
+   * @returns {number}
+   */
+  function firstGlobalMatchIndexInEntry(entry) {
+    for (let i = 0; i < filterMatches.length; i++) {
+      if (entry.contains(filterMatches[i])) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * @param {number} idx
+   * @param {number} len
+   * @returns {number}
+   */
+  function clampGlobalMatchIndex(idx, len) {
+    if (len <= 0) {
+      return -1;
+    }
+    return Math.min(Math.max(idx, 0), len - 1);
+  }
+
+  function updateFindNavUI() {
+    const q = filterInput.value.trim();
+    const hasQuery = q.length > 0;
+    filterFindNav.hidden = !hasQuery;
+
+    if (!hasQuery) {
+      filterMatchCounter.textContent = '';
+      btnFilterPrev.disabled = true;
+      btnFilterNext.disabled = true;
+      return;
+    }
+
+    const total = filterMatches.length;
+    if (total === 0) {
+      filterMatchCounter.textContent = '0 of 0';
+      btnFilterPrev.disabled = true;
+      btnFilterNext.disabled = true;
+      return;
+    }
+
+    filterMatchCounter.textContent = filterMatchIndex + 1 + ' of ' + total;
+    btnFilterPrev.disabled = false;
+    btnFilterNext.disabled = false;
+  }
+
+  /**
+   * @param {number} delta
+   */
+  function navigateFilterMatch(delta) {
+    flushPendingFindRefresh();
+
+    if (filterMatches.length === 0) { return; }
+
+    filterMatches.forEach((el) => el.classList.remove('filter-match-current'));
+
+    filterMatchIndex = (filterMatchIndex + delta + filterMatches.length) % filterMatches.length;
+    const cur = filterMatches[filterMatchIndex];
+    cur.classList.add('filter-match-current');
+    const row = /** @type {HTMLElement | null} */ (cur.closest('.log-entry'));
+    if (row) {
+      setSelectedLogEntry(row);
+    }
+    cur.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    updateFindNavUI();
+  }
+
+  function refreshFindHighlights() {
+    const q = filterInput.value.trim();
+    const queryChanged = q !== lastFindHighlightQuery;
+
+    /** @type {{ entry: HTMLElement; ordinal: number } | null} */
+    let preserve = null;
+    if (
+      !queryChanged &&
+      filterMatches.length > 0 &&
+      filterMatchIndex >= 0 &&
+      filterMatchIndex < filterMatches.length
+    ) {
+      preserve = captureMatchPreserveContext(filterMatches[filterMatchIndex]);
+    }
+
+    const prevGlobalIdx = filterMatchIndex;
+
+    stripFilterHighlights(container);
+
+    if (!q) {
+      filterMatches = [];
+      filterMatchIndex = -1;
+      lastFindHighlightQuery = '';
+      updateFindNavUI();
+      return;
+    }
+
+    let regex;
+    try {
+      regex = new RegExp(escapeRegex(q), 'gi');
+    } catch {
+      filterMatches = [];
+      filterMatchIndex = -1;
+      updateFindNavUI();
+      return;
+    }
+
+    container.querySelectorAll('.log-entry:not(.hidden)').forEach((el) => {
+      highlightFilterMatchesInEntry(/** @type {HTMLElement} */ (el), regex);
+    });
+
+    filterMatches = Array.from(container.querySelectorAll('mark.filter-match'));
+
+    if (selectedLogEntry && (!selectedLogEntry.isConnected || selectedLogEntry.classList.contains('hidden'))) {
+      setSelectedLogEntry(null);
+    }
+
+    if (filterMatches.length === 0) {
+      filterMatchIndex = -1;
+    } else if (queryChanged) {
+      filterMatchIndex = 0;
+      const entry = /** @type {HTMLElement | null} */ (filterMatches[0].closest('.log-entry'));
+      if (entry) {
+        setSelectedLogEntry(entry);
+      }
+    } else {
+      let idx = -1;
+      if (preserve) {
+        idx = resolvePreservedMatchIndex(preserve, filterMatches);
+      }
+      if (idx >= 0) {
+        filterMatchIndex = idx;
+      } else if (
+        selectedLogEntry &&
+        selectedLogEntry.isConnected &&
+        !selectedLogEntry.classList.contains('hidden')
+      ) {
+        const selIx = firstGlobalMatchIndexInEntry(selectedLogEntry);
+        filterMatchIndex = selIx >= 0 ? selIx : clampGlobalMatchIndex(prevGlobalIdx, filterMatches.length);
+      } else {
+        filterMatchIndex = clampGlobalMatchIndex(prevGlobalIdx, filterMatches.length);
+      }
+    }
+
+    filterMatches.forEach((el) => el.classList.remove('filter-match-current'));
+    if (filterMatchIndex >= 0 && filterMatchIndex < filterMatches.length) {
+      filterMatches[filterMatchIndex].classList.add('filter-match-current');
+    }
+
+    lastFindHighlightQuery = q;
+    updateFindNavUI();
+  }
+
+  function scheduleRefreshFindHighlights() {
+    if (findHighlightTimer !== null) {
+      clearTimeout(findHighlightTimer);
+    }
+    findHighlightTimer = setTimeout(() => {
+      findHighlightTimer = null;
+      refreshFindHighlights();
+    }, 80);
+  }
+
+  /** Apply debounced highlight refresh immediately if one is pending (keeps navigation in sync). */
+  function flushPendingFindRefresh() {
+    if (findHighlightTimer !== null) {
+      clearTimeout(findHighlightTimer);
+      findHighlightTimer = null;
+      refreshFindHighlights();
+    }
+  }
+
   // ── Filtering ──
 
   function applyFilters() {
@@ -739,12 +1280,12 @@
 
     entries.forEach((el) => {
       const element = /** @type {HTMLElement} */ (el);
-      const category = element.dataset.category || 'info';
+      const category = normalizeCategoryKey(element.dataset.category);
       const source = element.dataset.source || 'flutter';
       const searchText = element.dataset.searchText || '';
 
       const sourceMatch = source === 'flutter' || showSystemLogs;
-      const categoryMatch = activeCategories.get(category) !== false;
+      const categoryMatch = entryMatchesFilterMode(category, filterMode);
       const textMatch = !filterText || searchText.includes(filterText);
 
       if (sourceMatch && categoryMatch && textMatch) {
@@ -757,6 +1298,7 @@
 
     visibleCount = count;
     updateCounter(visibleCount);
+    scheduleRefreshFindHighlights();
   }
 
   /**
@@ -770,11 +1312,11 @@
    */
   function applyFilterToElement(el, entry) {
     const source = entry.source || 'flutter';
-    const category = entry.category || 'info';
+    const category = normalizeCategoryKey(entry.category);
     const searchText = el.dataset.searchText || '';
 
     const sourceMatch = source === 'flutter' || showSystemLogs;
-    const categoryMatch = activeCategories.get(category) !== false;
+    const categoryMatch = entryMatchesFilterMode(category, filterMode);
     const textMatch = !filterText || searchText.includes(filterText);
 
     if (!sourceMatch || !categoryMatch || !textMatch) {
@@ -786,11 +1328,28 @@
 
   // ── UI helpers ──
 
+  /**
+   * Move focus to a mutex chip so selection matches keyboard focus (unselect leaves focus on old chip otherwise).
+   * @param {string} category
+   */
+  function focusMutexChipByCategory(category) {
+    const key = normalizeFilterMode(category);
+    const chips = chipBar.querySelectorAll('.chip-filter-option[data-category]');
+    for (let i = 0; i < chips.length; i++) {
+      const el = /** @type {HTMLElement} */ (chips[i]);
+      if (normalizeFilterMode(el.dataset.category) === key && typeof el.focus === 'function') {
+        el.focus();
+        return;
+      }
+    }
+  }
+
   function updateChipUI() {
-    chipBar.querySelectorAll('.chip[data-category]').forEach((chip) => {
+    filterMode = normalizeFilterMode(filterMode);
+    chipBar.querySelectorAll('.chip-filter-option[data-category]').forEach((chip) => {
       const el = /** @type {HTMLElement} */ (chip);
-      const cat = el.dataset.category;
-      const on = !!(cat && activeCategories.get(cat));
+      const cat = normalizeFilterMode(el.dataset.category);
+      const on = cat === filterMode;
       el.classList.toggle('active', on);
       el.setAttribute('aria-checked', on ? 'true' : 'false');
     });
