@@ -318,23 +318,45 @@ export class LogParser {
   }
 
   /**
-   * Bracket tag at start of scanned segment, or null if none.
+   * Bracket tags on a line: every non-severity tag is registered for filter chips.
+   * When several `[...]` appear (e.g. "[UrlParser] ... [GoRouter] ..."), the **last** non-severity
+   * tag wins as category so the GoRouter filter matches real router lines after another tag.
    */
   private tryBracketTagCategory(text: string): LogCategory | null {
     const scanText = text.substring(0, TAG_SCAN_LIMIT);
-    const tagMatch = scanText.match(/\[([^\]]+)\]/);
-    if (!tagMatch) {
+    const re = /\[([^\]]+)\]/g;
+    const rawTags: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(scanText)) !== null) {
+      rawTags.push(m[1]);
+    }
+    if (rawTags.length === 0) {
       return null;
     }
-    const tagName = this.normalizeBracketTagForCategory(tagMatch[1]);
-    if (!tagName) {
-      return null;
+
+    const severities: LogCategory[] = [];
+    const dynamics: LogCategory[] = [];
+
+    for (const raw of rawTags) {
+      const tagName = this.normalizeBracketTagForCategory(raw);
+      if (!tagName) {
+        continue;
+      }
+      if (severitySet.has(tagName)) {
+        severities.push(tagName);
+      } else {
+        this.knownTags.add(tagName);
+        dynamics.push(tagName);
+      }
     }
-    if (severitySet.has(tagName)) {
-      return tagName;
+
+    if (dynamics.length > 0) {
+      return dynamics[dynamics.length - 1];
     }
-    this.knownTags.add(tagName);
-    return tagName;
+    if (severities.length > 0) {
+      return severities[0];
+    }
+    return null;
   }
 
   /** Tags are often on the 2nd+ content line after a blank or separator — scan the whole block. */

@@ -337,6 +337,17 @@ describe('category detection', () => {
     expect(parser.getKnownTags()).toContain('gorouter');
   });
 
+  it('plain: multiple bracket tags on one line — last non-severity wins (GoRouter after UrlParser)', () => {
+    const { entries, parser } = collect();
+    parser.processOutput(
+      '[UrlParser] entry message parse error Exception: error url: / [GoRouter] setting initial location /login_page\n',
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0].category).toBe('gorouter');
+    expect(parser.getKnownTags()).toContain('gorouter');
+    expect(parser.getKnownTags()).toContain('urlparser');
+  });
+
   it('plain: ASCII-pipe prefixed tree lines inherit [GoRouter] category', () => {
     const { entries, parser } = collect();
     parser.processOutput(
