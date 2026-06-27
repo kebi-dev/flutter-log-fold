@@ -517,6 +517,45 @@ describe('plain lines', () => {
     expect(entries[0].summary).toHaveLength(123);
     expect(entries[0].summary).toMatch(/\.\.\.$/);
   });
+
+  it('preserves blank lines between log lines', () => {
+    const { entries, parser } = collect();
+    parser.processOutput('first line\n\nthird line\n');
+    expect(entries).toHaveLength(3);
+    expect(entries[0].summary).toBe('first line');
+    expect(entries[1].summary).toBe('');
+    expect(entries[1].lines).toEqual(['']);
+    expect(entries[2].summary).toBe('third line');
+  });
+
+  it('buffers partial plain lines across output chunks', () => {
+    const { entries, parser } = collect();
+    parser.processOutput('partial');
+    expect(entries).toHaveLength(0);
+    parser.processOutput(' line\nnext line\n');
+    expect(entries).toHaveLength(2);
+    expect(entries[0].summary).toBe('partial line');
+    expect(entries[1].summary).toBe('next line');
+  });
+
+  it('flush emits a final partial line without trailing newline', () => {
+    const { entries, parser } = collect();
+    parser.processOutput('last line without newline');
+    expect(entries).toHaveLength(0);
+    parser.flush();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].summary).toBe('last line without newline');
+  });
+
+  it('buffers partial block content across output chunks', () => {
+    const { entries, parser } = collect();
+    parser.processOutput('┌──────────\n│ hello');
+    expect(entries).toHaveLength(0);
+    parser.processOutput(' world\n└──────────\n');
+    expect(entries).toHaveLength(1);
+    expect(entries[0].type).toBe('talker-block');
+    expect(entries[0].summary).toBe('hello world');
+  });
 });
 
 // ── 12. updatePatterns / updateSettings ──────────────────────────────

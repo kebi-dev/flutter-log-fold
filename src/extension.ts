@@ -3,6 +3,7 @@ import { LogParser } from './LogParser';
 import { LogPanelProvider } from './LogPanelProvider';
 import { LogViewerCoordinator } from './logViewerCoordinator';
 import { buildLogViewerHtml } from './logViewerHtml';
+import { getDebugOutputText } from './debugOutput';
 import { BlockPatterns, ParserSettings, PRESETS } from './types';
 
 let coordinator: LogViewerCoordinator;
@@ -85,23 +86,9 @@ export function activate(context: vscode.ExtensionContext) {
 
         return {
           onDidSendMessage(message: any) {
-            if (
-              message.type === 'event' &&
-              message.event === 'output' &&
-              message.body?.output
-            ) {
-              const category = message.body.category as string | undefined;
-              // Include missing / important — Dart adapter sometimes omits category on tooling lines.
-              if (
-                category === undefined ||
-                category === '' ||
-                category === 'stdout' ||
-                category === 'stderr' ||
-                category === 'console' ||
-                category === 'important'
-              ) {
-                parser.processOutput(message.body.output);
-              }
+            const output = getDebugOutputText(message);
+            if (output !== null) {
+              parser.processOutput(output);
             }
           },
         };

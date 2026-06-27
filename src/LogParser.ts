@@ -40,6 +40,7 @@ export class LogParser {
   private blockDisplayBuffer: string[] = [];
   private blockDetectBuffer: string[] = [];
   private blockSource: LogSource = 'flutter';
+  private pendingLineFragment = '';
   /** Plain `[Tag]` line category carried onto following tree/indented lines (GoRouter dumps, etc.). */
   private lastBracketTaggedPlainCategory: LogCategory | null = null;
   private patterns: BlockPatterns;
@@ -92,14 +93,35 @@ export class LogParser {
   }
 
   processOutput(text: string): void {
-    const lines = text.split('\n');
+    if (text.length === 0) {
+      return;
+    }
+
+    const normalizedText = text.replace(/\r\n/g, '\n');
+    const combinedText = this.pendingLineFragment + normalizedText;
+    const lines = combinedText.split('\n');
+    const hasTrailingNewline = combinedText.endsWith('\n');
+
+    if (hasTrailingNewline) {
+      this.pendingLineFragment = '';
+      lines.pop();
+    } else {
+      this.pendingLineFragment = lines.pop() ?? '';
+    }
+
     for (const line of lines) {
-      if (line === '') { continue; }
-      this.processLine(line);
+      this.processLine(line.endsWith('\r') ? line.slice(0, -1) : line);
     }
   }
 
   flush(): void {
+    if (this.pendingLineFragment.length > 0) {
+      this.processLine(this.pendingLineFragment.endsWith('\r')
+        ? this.pendingLineFragment.slice(0, -1)
+        : this.pendingLineFragment);
+      this.pendingLineFragment = '';
+    }
+
     if (this.inBlock && this.blockDisplayBuffer.length > 0) {
       this.emitBlock();
     }

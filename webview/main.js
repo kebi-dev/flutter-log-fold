@@ -85,6 +85,7 @@
   /** Row the user chose (persists across expand/collapse and highlight rebuilds). */
   /** @type {HTMLElement | null} */
   let selectedLogEntry = null;
+  let suppressBulkToggleRefresh = 0;
 
   /**
    * @param {string} category
@@ -264,10 +265,85 @@
   container.addEventListener(
     'toggle',
     () => {
+      updateToolbarActionState();
+      if (suppressBulkToggleRefresh > 0) {
+        return;
+      }
       scheduleRefreshFindHighlights();
     },
     true,
   );
+
+  /**
+   * @returns {HTMLDetailsElement[]}
+   */
+  function getVisibleTopLevelBlockDetails() {
+    return Array.from(container.querySelectorAll('.log-entry.block:not(.hidden) > details'));
+  }
+
+  /**
+   * @returns {{ roots: HTMLDetailsElement[], descendants: HTMLDetailsElement[] }}
+   */
+  function collectVisibleFoldDetails() {
+    const roots = getVisibleTopLevelBlockDetails();
+    const descendants = [];
+    roots.forEach((root) => {
+      root.querySelectorAll('details').forEach((child) => {
+        descendants.push(/** @type {HTMLDetailsElement} */ (child));
+      });
+    });
+    return { roots, descendants };
+  }
+
+  function updateToolbarActionState() {
+    const roots = getVisibleTopLevelBlockDetails();
+    const hasVisibleBlocks = roots.length > 0;
+    btnCollapse.disabled = !hasVisibleBlocks || !roots.some((d) => d.open);
+    btnExpand.disabled = !hasVisibleBlocks || !roots.some((d) => !d.open);
+  }
+
+  /**
+   * @param {boolean} expand
+   */
+  function setVisibleEntriesExpanded(expand) {
+    const { roots, descendants } = collectVisibleFoldDetails();
+    if (roots.length === 0) {
+      updateToolbarActionState();
+      return;
+    }
+
+    suppressBulkToggleRefresh++;
+    try {
+      if (expand) {
+        roots.forEach((d) => {
+          if (!d.open) {
+            d.open = true;
+          }
+        });
+        descendants.forEach((d) => {
+          if (!d.open) {
+            d.open = true;
+          }
+        });
+      } else {
+        for (let i = descendants.length - 1; i >= 0; i--) {
+          if (descendants[i].open) {
+            descendants[i].open = false;
+          }
+        }
+        for (let i = roots.length - 1; i >= 0; i--) {
+          if (roots[i].open) {
+            roots[i].open = false;
+          }
+        }
+      }
+    } finally {
+      suppressBulkToggleRefresh--;
+    }
+
+    updateToolbarActionState();
+    scheduleRefreshFindHighlights();
+  }
 
   /**
    * @param {HTMLElement | null} entry
@@ -683,11 +759,11 @@
   });
 
   btnCollapse.addEventListener('click', () => {
-    container.querySelectorAll('details[open]').forEach((d) => d.removeAttribute('open'));
+    setVisibleEntriesExpanded(false);
   });
 
   btnExpand.addEventListener('click', () => {
-    container.querySelectorAll('details:not([open])').forEach((d) => d.setAttribute('open', ''));
+    setVisibleEntriesExpanded(true);
   });
 
   btnNewViewer.addEventListener('click', () => {
@@ -803,6 +879,7 @@
     const isVisible = applyFilterToElement(el, entry);
     if (isVisible) { visibleCount++; }
     updateCounter(visibleCount);
+    updateToolbarActionState();
     scheduleRefreshFindHighlights();
     autoScroll();
   }
@@ -824,6 +901,7 @@
     }
     container.appendChild(fragment);
     applyFilters();
+    updateToolbarActionState();
     autoScroll();
   }
 
@@ -842,6 +920,7 @@
     filterMatchIndex = -1;
     resetDynamicFilterChips();
     updateCounter(0);
+    updateToolbarActionState();
     updateFindNavUI();
   }
 
@@ -1298,6 +1377,7 @@
 
     visibleCount = count;
     updateCounter(visibleCount);
+    updateToolbarActionState();
     scheduleRefreshFindHighlights();
   }
 
@@ -1656,6 +1736,8 @@
     }
     return '<div class="jt-row">' + prefixHtml + html + comma + '</div>';
   }
+
+  updateToolbarActionState();
 
   // Signal to extension that webview is ready to receive messages
   vscode.postMessage({ command: 'ready' });
