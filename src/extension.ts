@@ -28,9 +28,7 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('flutterLogFold.show', () => {
-      vscode.commands.executeCommand('flutterLogFold.logView.focus');
-    }),
+    vscode.commands.registerCommand('flutterLogFold.show', () => showMainLogView()),
   );
 
   context.subscriptions.push(
@@ -81,7 +79,7 @@ export function activate(context: vscode.ExtensionContext) {
       createDebugAdapterTracker(session: vscode.DebugSession) {
         const autoOpen = vscode.workspace.getConfiguration('flutterLogFold').get<boolean>('autoOpen', true);
         if (autoOpen) {
-          vscode.commands.executeCommand('flutterLogFold.logView.focus');
+          void showMainLogView();
         }
 
         return {
@@ -107,6 +105,11 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }),
   );
+}
+
+async function showMainLogView(): Promise<void> {
+  await vscode.commands.executeCommand('workbench.view.extension.flutterLogFold');
+  await vscode.commands.executeCommand('flutterLogFold.logView.focus');
 }
 
 function resolvePatterns(): BlockPatterns {
