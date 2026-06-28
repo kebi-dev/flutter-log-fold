@@ -7,6 +7,8 @@ import { BlockPatterns, ParserSettings, PRESETS } from './types';
 
 let coordinator: LogViewerCoordinator;
 let parser: LogParser;
+const DART_DEBUG_CONTEXT_KEY = 'flutterLogFold.hasActiveDartDebugSession';
+const activeDartSessionIds = new Set<string>();
 
 export function activate(context: vscode.ExtensionContext) {
   coordinator = new LogViewerCoordinator();
@@ -18,6 +20,7 @@ export function activate(context: vscode.ExtensionContext) {
   });
 
   coordinator.setKnownTagsGetter(() => parser.getKnownTags());
+  void updateDartDebugContext();
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
@@ -78,6 +81,8 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterTrackerFactory('dart', {
       createDebugAdapterTracker(session: vscode.DebugSession) {
+        activeDartSessionIds.add(session.id);
+        void setDartDebugContext(true);
         const autoOpen = vscode.workspace.getConfiguration('flutterLogFold').get<boolean>('autoOpen', true);
         if (autoOpen) {
           vscode.commands.executeCommand('flutterLogFold.logView.focus');
@@ -106,6 +111,30 @@ export function activate(context: vscode.ExtensionContext) {
           },
         };
       },
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.debug.onDidStartDebugSession((session) => {
+      if (session.type === 'dart') {
+        activeDartSessionIds.add(session.id);
+        void setDartDebugContext(true);
+      }
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.debug.onDidTerminateDebugSession((session) => {
+      if (session.type === 'dart') {
+        activeDartSessionIds.delete(session.id);
+        void updateDartDebugContext(session.id);
+      }
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.debug.onDidChangeActiveDebugSession(() => {
+      void updateDartDebugContext();
     }),
   );
 
@@ -153,4 +182,28 @@ function resolveParserSettings(): ParserSettings {
 
 export function deactivate() {
   parser?.flush();
+  void vscode.commands.executeCommand('setContext', DART_DEBUG_CONTEXT_KEY, false);
+}
+
+function hasActiveDartDebugSession(terminatedSessionId?: string): boolean {
+  const activeSession = vscode.debug.activeDebugSession;
+  if (isDartDebugSession(activeSession, terminatedSessionId)) {
+    return true;
+  }
+  return [...activeDartSessionIds].some((sessionId) => sessionId !== terminatedSessionId);
+}
+
+function isDartDebugSession(session: vscode.DebugSession | undefined, terminatedSessionId?: string): boolean {
+  if (!session || session.id === terminatedSessionId) {
+    return false;
+  }
+  return session.type === 'dart';
+}
+
+function setDartDebugContext(value: boolean): Thenable<unknown> {
+  return vscode.commands.executeCommand('setContext', DART_DEBUG_CONTEXT_KEY, value);
+}
+
+function updateDartDebugContext(terminatedSessionId?: string): Thenable<unknown> {
+  return setDartDebugContext(hasActiveDartDebugSession(terminatedSessionId));
 }

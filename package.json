@@ -51,7 +51,8 @@
         {
           "type": "webview",
           "id": "flutterLogFold.logView",
-          "name": "Flutter Logs"
+          "name": "Flutter Logs",
+          "when": "flutterLogFold.hasActiveDartDebugSession"
         }
       ]
     },

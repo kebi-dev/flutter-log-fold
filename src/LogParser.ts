@@ -31,6 +31,11 @@ const CATEGORY_RULES: CategoryRule[] = [
 const MAX_SUMMARY_LENGTH = 120;
 const DEFAULT_MAX_BLOCK_LINES = 50_000;
 const TAG_SCAN_LIMIT = 100;
+/**
+ * Explicit custom tags must use double braces, e.g. `{{GoRouter}}`.
+ * This avoids accidental matches on arbitrary bracketed payloads such as arrays.
+ */
+const EXPLICIT_TAG_REGEX = /(?:^|\s*)\{\{([\p{L}_][\p{L}\p{N}_\-\s]*)\}\}(?=$|\s|[|:,.!?])/gu;
 
 const severitySet = new Set<string>(SEVERITY_LEVELS);
 
@@ -40,8 +45,8 @@ export class LogParser {
   private blockDisplayBuffer: string[] = [];
   private blockDetectBuffer: string[] = [];
   private blockSource: LogSource = 'flutter';
-  /** Plain `[Tag]` line category carried onto following tree/indented lines (GoRouter dumps, etc.). */
-  private lastBracketTaggedPlainCategory: LogCategory | null = null;
+  /** Plain `{{Tag}}` line category carried onto following tree/indented lines (GoRouter dumps, etc.). */
+  private lastExplicitTaggedPlainCategory: LogCategory | null = null;
   private patterns: BlockPatterns;
   private lineStripRegex: RegExp | null = null;
   private blockPrefixRegex: RegExp | null = null;
@@ -159,10 +164,10 @@ export class LogParser {
       }
     }
 
-    // lineStripPattern on detection line only — capture `[tag]` before strip so regex cannot erase categories
-    let bracketBeforeStripCategory: LogCategory | null = null;
+    // lineStripPattern on detection line only — capture explicit `{{tag}}` before strip so regex cannot erase categories
+    let explicitBeforeStripCategory: LogCategory | null = null;
     if (this.lineStripRegex) {
-      bracketBeforeStripCategory = this.tryBracketTagCategory(detectLine);
+      explicitBeforeStripCategory = this.tryExplicitTagCategory(detectLine);
       detectLine = detectLine.replace(this.lineStripRegex, '');
     }
 
@@ -176,7 +181,7 @@ export class LogParser {
       if (this.inBlock && this.blockDisplayBuffer.length > 0) {
         this.emitBlock();
       }
-      this.lastBracketTaggedPlainCategory = null;
+      this.lastExplicitTaggedPlainCategory = null;
       this.inBlock = true;
       this.blockDisplayBuffer = [displayLine];
       this.blockDetectBuffer = [detectLine];
@@ -188,7 +193,7 @@ export class LogParser {
       // Line from a different source (e.g. W/BillingClient during I/flutter block)
       // — emit as standalone plain log, don't pollute the block buffer
       if (source !== this.blockSource) {
-        this.emitPlain(displayLine, detectLine, source, bracketBeforeStripCategory);
+        this.emitPlain(displayLine, detectLine, source, explicitBeforeStripCategory);
         return;
       }
 
@@ -209,7 +214,7 @@ export class LogParser {
     }
 
     // Plain line
-    this.emitPlain(displayLine, detectLine, source, bracketBeforeStripCategory);
+    this.emitPlain(displayLine, detectLine, source, explicitBeforeStripCategory);
   }
 
   private emitBlock(): void {
@@ -233,12 +238,12 @@ export class LogParser {
     this.inBlock = false;
     this.blockDisplayBuffer = [];
     this.blockDetectBuffer = [];
-    this.lastBracketTaggedPlainCategory = null;
+    this.lastExplicitTaggedPlainCategory = null;
     this.onEntry(entry);
   }
 
   /**
-   * Lines like GoRouter route trees: no `[Tag]`, but box-drawing / tree arms continue the prior tagged log.
+   * Lines like GoRouter route trees: no `{{Tag}}`, but box-drawing / tree arms continue the prior tagged log.
    */
   private isBracketTaggedContinuationLine(line: string): boolean {
     const trimmed = line.trim();
@@ -264,23 +269,23 @@ export class LogParser {
     displayLine: string,
     detectLine: string,
     source: LogSource,
-    bracketBeforeStripCategory: LogCategory | null = null,
+    explicitBeforeStripCategory: LogCategory | null = null,
   ): void {
-    const postBracket = this.tryBracketTagCategory(detectLine);
-    const bracketCat = postBracket !== null ? postBracket : bracketBeforeStripCategory;
+    const postExplicit = this.tryExplicitTagCategory(detectLine);
+    const explicitCat = postExplicit !== null ? postExplicit : explicitBeforeStripCategory;
     let category: LogCategory;
 
-    if (bracketCat !== null) {
-      category = bracketCat;
-      this.lastBracketTaggedPlainCategory = bracketCat;
+    if (explicitCat !== null) {
+      category = explicitCat;
+      this.lastExplicitTaggedPlainCategory = explicitCat;
     } else if (
       this.isBracketTaggedContinuationLine(detectLine) &&
-      this.lastBracketTaggedPlainCategory !== null
+      this.lastExplicitTaggedPlainCategory !== null
     ) {
-      category = this.lastBracketTaggedPlainCategory;
+      category = this.lastExplicitTaggedPlainCategory;
     } else {
       category = this.detectCategory(detectLine);
-      this.lastBracketTaggedPlainCategory = null;
+      this.lastExplicitTaggedPlainCategory = null;
     }
 
     const summaryText = detectLine.length > MAX_SUMMARY_LENGTH
@@ -299,7 +304,7 @@ export class LogParser {
     this.onEntry(entry);
   }
 
-  /** Category / filter key: Talker `[base-suffix]` → `base`; `[H5 参数]` → `h5_参数`. */
+  /** Category / filter key: tag `base-suffix` → `base`; `H5 参数` → `h5_参数`. */
   private normalizeBracketTagForCategory(raw: string): string {
     const trimmed = raw.trim();
     if (!trimmed) {
@@ -318,16 +323,17 @@ export class LogParser {
   }
 
   /**
-   * Bracket tags on a line: every non-severity tag is registered for filter chips.
-   * When several `[...]` appear (e.g. "[UrlParser] ... [GoRouter] ..."), the **last** non-severity
-   * tag wins as category so the GoRouter filter matches real router lines after another tag.
+   * Explicit custom tags on a line: every non-severity tag is registered for filter chips.
+   * Tags must be wrapped as `{{tag}}`, which keeps accidental payloads from becoming chips.
+   * When several `{{...}}` appear (e.g. "{{UrlParser}} ... {{GoRouter}}"), the **last**
+   * non-severity tag wins as category so the GoRouter filter matches real router lines
+   * after another tag.
    */
-  private tryBracketTagCategory(text: string): LogCategory | null {
+  private tryExplicitTagCategory(text: string): LogCategory | null {
     const scanText = text.substring(0, TAG_SCAN_LIMIT);
-    const re = /\[([^\]]+)\]/g;
     const rawTags: string[] = [];
     let m: RegExpExecArray | null;
-    while ((m = re.exec(scanText)) !== null) {
+    while ((m = EXPLICIT_TAG_REGEX.exec(scanText)) !== null) {
       rawTags.push(m[1]);
     }
     if (rawTags.length === 0) {
@@ -359,10 +365,29 @@ export class LogParser {
     return null;
   }
 
+  /**
+   * Talker / formatter headers still use single brackets like `[info]` or `[bloc-transition]`.
+   * These remain supported for block categorization and built-in formatter behavior.
+   */
+  private tryTalkerBracketHeaderCategory(text: string): LogCategory | null {
+    const match = text.trim().match(/^\[([^\]]+)\]/);
+    if (!match) {
+      return null;
+    }
+    const tagName = this.normalizeBracketTagForCategory(match[1]);
+    if (!tagName) {
+      return null;
+    }
+    if (!severitySet.has(tagName)) {
+      this.knownTags.add(tagName);
+    }
+    return tagName;
+  }
+
   /** Tags are often on the 2nd+ content line after a blank or separator — scan the whole block. */
   private detectCategoryForBlock(cleanLines: string[]): LogCategory {
     for (const line of cleanLines) {
-      const fromTag = this.tryBracketTagCategory(line);
+      const fromTag = this.tryExplicitTagCategory(line) ?? this.tryTalkerBracketHeaderCategory(line);
       if (fromTag !== null) {
         return fromTag;
       }
@@ -372,7 +397,7 @@ export class LogParser {
   }
 
   private detectCategory(text: string): LogCategory {
-    const fromTag = this.tryBracketTagCategory(text);
+    const fromTag = this.tryExplicitTagCategory(text);
     if (fromTag !== null) {
       return fromTag;
     }
