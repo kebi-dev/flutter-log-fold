@@ -35,6 +35,9 @@ export function buildLogViewerHtml(webview: vscode.Webview, extensionUri: vscode
         <button type="button" id="btn-new-viewer" class="toolbar-btn-icon" title="Open another Flutter Logs tab with the same live stream (filters are independent)" aria-label="Open another Flutter Logs viewer">
           <span class="codicon codicon-multiple-windows" aria-hidden="true"></span>
         </button>
+        <button type="button" id="btn-new-tab" class="toolbar-btn-icon" title="Create a filter tab from the current filters" aria-label="Create Flutter Logs filter tab">
+          <span class="codicon codicon-add" aria-hidden="true"></span>
+        </button>
       </div>
       <div class="filter-find-cluster">
         <div class="filter-input-wrap">
@@ -72,7 +75,14 @@ export function buildLogViewerHtml(webview: vscode.Webview, extensionUri: vscode
       </div>
     </div>
   </div>
-  <div id="log-container" class="log-container"></div>
+  <div id="log-panes" class="log-panes">
+    <section class="log-pane active" data-tab-id="tab-1" style="flex-basis: 100%;">
+      <button type="button" class="log-pane-title" data-tab-id="tab-1" hidden>
+        <span class="log-tab-label">All</span>
+      </button>
+      <div id="log-container" class="log-container"></div>
+    </section>
+  </div>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;

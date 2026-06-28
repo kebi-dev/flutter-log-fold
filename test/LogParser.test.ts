@@ -317,7 +317,7 @@ describe('category detection', () => {
   it('block: explicit tag on 2nd content line still sets dynamic category', () => {
     const { entries, parser } = collect();
     parser.processOutput(
-      '┌──────────\n│ \n│ {{logpath}} routed request\n└──────────\n',
+      '┌──────────\n│ \n│  {{logpath}} routed request\n└──────────\n',
     );
     expect(entries).toHaveLength(1);
     expect(entries[0].category).toBe('logpath');
@@ -327,8 +327,8 @@ describe('category detection', () => {
   it('plain: GoRouter-style tree lines inherit prior {{GoRouter}} category', () => {
     const { entries, parser } = collect();
     parser.processOutput(
-      '{{GoRouter}} setting initial location /login_page\n' +
-        '{{GoRouter}} Full paths for routes:\n' +
+      '  {{GoRouter}} setting initial location /login_page\n' +
+        '  {{GoRouter}} Full paths for routes:\n' +
         '├─/ (Widget)\n' +
         '│ └─/login_page (Widget)\n',
     );
@@ -340,7 +340,7 @@ describe('category detection', () => {
   it('plain: multiple explicit tags on one line — last non-severity wins (GoRouter after UrlParser)', () => {
     const { entries, parser } = collect();
     parser.processOutput(
-      '{{UrlParser}} entry message parse error Exception: error url: / {{GoRouter}} setting initial location /login_page\n',
+      '  {{UrlParser}}  {{GoRouter}} setting initial location /login_page\n',
     );
     expect(entries).toHaveLength(1);
     expect(entries[0].category).toBe('gorouter');
@@ -352,9 +352,25 @@ describe('category detection', () => {
     const { entries, parser } = collect();
     parser.processOutput('goodRoadTypeList=[1, 2, 3] {{GoRouter}} location update\n');
     expect(entries).toHaveLength(1);
+    expect(entries[0].category).toBe('info');
+    expect(parser.getKnownTags()).not.toContain('gorouter');
+    expect(parser.getKnownTags()).not.toContain('1,_2,_3');
+  });
+
+  it('plain: mid-line double-brace payload is not treated as a dynamic tag', () => {
+    const { entries, parser } = collect();
+    parser.processOutput('payload {{GoRouter}} should stay plain\n');
+    expect(entries).toHaveLength(1);
+    expect(entries[0].category).toBe('info');
+    expect(parser.getKnownTags()).not.toContain('gorouter');
+  });
+
+  it('plain: line-start double-brace tag without leading whitespace is treated as a dynamic tag', () => {
+    const { entries, parser } = collect();
+    parser.processOutput('{{GoRouter}} should be tagged\n');
+    expect(entries).toHaveLength(1);
     expect(entries[0].category).toBe('gorouter');
     expect(parser.getKnownTags()).toContain('gorouter');
-    expect(parser.getKnownTags()).not.toContain('1,_2,_3');
   });
 
   it('plain: bracketed payload without leading whitespace is not treated as a tag', () => {
@@ -376,7 +392,7 @@ describe('category detection', () => {
   it('plain: ASCII-pipe prefixed tree lines inherit {{GoRouter}} category', () => {
     const { entries, parser } = collect();
     parser.processOutput(
-      '{{GoRouter}} Full paths for routes:\n' +
+      '  {{GoRouter}} Full paths for routes:\n' +
         '| ├─/ (Widget)\n' +
         '| └─/login_page (Widget)\n',
     );
@@ -387,7 +403,7 @@ describe('category detection', () => {
   it('plain: "| #n stack" lines do not inherit {{GoRouter}}; sticky tag clears', () => {
     const { entries, parser } = collect();
     parser.processOutput(
-      '{{GoRouter}} msg\n' +
+      '  {{GoRouter}} msg\n' +
         '| #1 StatefulElement.build (framework.dart:1:1)\n' +
         'plain after stack\n',
     );

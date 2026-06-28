@@ -148,6 +148,106 @@ body {
   border-radius: 5px;
 }
 
+.log-panes {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.log-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--vscode-panel-border);
+}
+
+.log-pane:last-child {
+  border-right: none;
+}
+
+.log-pane.active {
+  outline: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 70%, transparent);
+  outline-offset: -1px;
+}
+
+.log-pane-title {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  height: 27px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-tab-inactiveBackground, var(--vscode-panel-background));
+  color: var(--vscode-descriptionForeground);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  text-align: left;
+}
+
+.log-pane-title[hidden] {
+  display: none !important;
+}
+
+.log-pane-title:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--vscode-editor-foreground);
+}
+
+.log-pane-title:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.log-pane.active .log-pane-title {
+  background: var(--vscode-tab-activeBackground, var(--vscode-panel-background));
+  color: var(--vscode-tab-activeForeground, var(--vscode-editor-foreground));
+}
+
+.log-pane.active .log-pane-title::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 2px;
+  background: var(--vscode-focusBorder);
+}
+
+.log-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-pane-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  z-index: 5;
+  cursor: col-resize;
+}
+
+.log-pane-resizer:hover,
+.log-pane-resizer.dragging {
+  background: color-mix(in srgb, var(--vscode-focusBorder) 36%, transparent);
+}
+
+body.dragging-log-pane {
+  cursor: col-resize;
+  user-select: none;
+}
+
 #input-filter {
   flex: 1;
   min-width: 0;

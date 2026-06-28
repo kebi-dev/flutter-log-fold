@@ -23,7 +23,7 @@ Multi-line log blocks (Talker's box-drawing `┌│└` output, etc.) are detect
 ### Filtering and search
 
 - **Severity chips** — toggle INFO, ERROR, WARN, DEBUG, VERBOSE, CRITICAL on/off
-- **Custom tag chips** — explicit tags like `{{gorouter}}`, `{{http-request}}`, `{{domain_update}}` are auto-detected from incoming logs and get their own color-coded filter chips
+- **Custom tag chips** — explicit line-header tags like `{{gorouter}}`, `{{http-request}}`, `{{domain_update}}` are auto-detected from incoming logs and get their own color-coded filter chips
 - **Text search** — case-insensitive live filter with a visible counter (`X / Y`)
 - **System log toggle** — show/hide Android system logs (Choreographer, BillingClient, etc.) via the SYS chip
 - **ALL chip** — toggle all categories at once

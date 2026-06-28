@@ -4,7 +4,8 @@
   // @ts-ignore
   const vscode = acquireVsCodeApi();
 
-  const container = /** @type {HTMLElement} */ (document.getElementById('log-container'));
+  let container = /** @type {HTMLElement} */ (document.getElementById('log-container'));
+  const panesRoot = /** @type {HTMLElement} */ (document.getElementById('log-panes'));
   const filterInput = /** @type {HTMLInputElement} */ (document.getElementById('input-filter'));
   const counterEl = /** @type {HTMLElement} */ (document.getElementById('counter'));
   const chipBar = /** @type {HTMLElement} */ (document.getElementById('chip-bar'));
@@ -14,6 +15,7 @@
   const btnCollapse = /** @type {HTMLElement} */ (document.getElementById('btn-collapse'));
   const btnExpand = /** @type {HTMLElement} */ (document.getElementById('btn-expand'));
   const btnNewViewer = /** @type {HTMLElement} */ (document.getElementById('btn-new-viewer'));
+  const btnNewTab = /** @type {HTMLElement} */ (document.getElementById('btn-new-tab'));
   const chipSystem = /** @type {HTMLElement} */ (document.getElementById('chip-system'));
   const filterFindNav = /** @type {HTMLElement} */ (document.getElementById('filter-find-nav'));
   const filterMatchCounter = /** @type {HTMLElement} */ (document.getElementById('filter-match-counter'));
@@ -86,6 +88,24 @@
   /** @type {HTMLElement | null} */
   let selectedLogEntry = null;
   let suppressBulkToggleRefresh = 0;
+
+  let nextLogTabId = 2;
+  let activeLogTabId = 'tab-1';
+  let suppressTabStateSync = false;
+  /** @type {any[]} */
+  const logEntries = [];
+  /** @type {{ id: string; name: string; filterText: string; filterMode: string; showSystemLogs: boolean; pane: HTMLElement; container: HTMLElement; visibleCount: number; userAtBottom: boolean }[]} */
+  const logTabs = [{
+    id: activeLogTabId,
+    name: 'All',
+    filterText: '',
+    filterMode: 'all',
+    showSystemLogs: false,
+    pane: /** @type {HTMLElement} */ (container.closest('.log-pane')),
+    container,
+    visibleCount: 0,
+    userAtBottom: true,
+  }];
 
   /**
    * @param {string} category
@@ -226,6 +246,223 @@
 
   initChipBar();
 
+  /**
+   * @returns {{ id: string; name: string; filterText: string; filterMode: string; showSystemLogs: boolean; pane: HTMLElement; container: HTMLElement; visibleCount: number; userAtBottom: boolean } | undefined}
+   */
+  function getActiveLogTab() {
+    return logTabs.find((tab) => tab.id === activeLogTabId);
+  }
+
+  /**
+   * @param {string} value
+   * @returns {string}
+   */
+  function compactTabName(value) {
+    const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      return '';
+    }
+    return normalized.length <= 18 ? normalized : normalized.substring(0, 18) + '...';
+  }
+
+  /**
+   * @param {{ filterText: string; filterMode: string; showSystemLogs: boolean }} state
+   * @param {number} fallbackIndex
+   * @returns {string}
+   */
+  function deriveTabName(state, fallbackIndex) {
+    const fromText = compactTabName(state.filterText);
+    if (fromText) {
+      return fromText;
+    }
+    const mode = normalizeFilterMode(state.filterMode);
+    if (mode !== 'all') {
+      return compactTabName(mode.toUpperCase());
+    }
+    if (state.showSystemLogs) {
+      return 'SYS';
+    }
+    return 'Tab ' + fallbackIndex;
+  }
+
+  function currentFilterState() {
+    return {
+      filterText: filterInput.value,
+      filterMode: normalizeFilterMode(filterMode),
+      showSystemLogs,
+    };
+  }
+
+  function syncActiveLogTabState() {
+    if (suppressTabStateSync) {
+      return;
+    }
+    const tab = getActiveLogTab();
+    if (!tab) {
+      return;
+    }
+    const state = currentFilterState();
+    tab.filterText = state.filterText;
+    tab.filterMode = state.filterMode;
+    tab.showSystemLogs = state.showSystemLogs;
+    tab.name = deriveTabName(tab, logTabs.indexOf(tab) + 1);
+    renderLogTabs();
+  }
+
+  function updateSystemChipUI() {
+    if (showSystemLogs) {
+      chipSystem.classList.add('active');
+      chipSystem.setAttribute('aria-checked', 'true');
+    } else {
+      chipSystem.classList.remove('active');
+      chipSystem.setAttribute('aria-checked', 'false');
+    }
+  }
+
+  /**
+   * @param {{ filterText: string; filterMode: string; showSystemLogs: boolean }} state
+   */
+  function applyLogTabState(state) {
+    suppressTabStateSync = true;
+    const tab = getActiveLogTab();
+    if (tab) {
+      container = tab.container;
+    }
+    filterText = String(state.filterText || '').toLowerCase();
+    filterInput.value = state.filterText || '';
+    filterMode = normalizeFilterMode(state.filterMode);
+    showSystemLogs = !!state.showSystemLogs;
+    updateSystemChipUI();
+    updateChipUI();
+    suppressTabStateSync = false;
+    applyFilters();
+  }
+
+  function renderLogTabs() {
+    const showTitles = logTabs.length > 1;
+    for (let i = 0; i < logTabs.length; i++) {
+      const tab = logTabs[i];
+      tab.pane.classList.toggle('active', tab.id === activeLogTabId);
+      tab.pane.style.flexBasis = tab.pane.style.flexBasis || (100 / logTabs.length) + '%';
+      const title = /** @type {HTMLElement | null} */ (tab.pane.querySelector('.log-pane-title'));
+      if (title) {
+        title.hidden = !showTitles;
+        title.dataset.tabId = tab.id;
+        title.title = tab.name;
+        title.setAttribute('aria-selected', tab.id === activeLogTabId ? 'true' : 'false');
+        const label = title.querySelector('.log-tab-label');
+        if (label) {
+          label.textContent = tab.name;
+        }
+      }
+      const existingResizer = tab.pane.querySelector('.log-pane-resizer');
+      if (existingResizer) {
+        existingResizer.remove();
+      }
+      if (showTitles && i < logTabs.length - 1) {
+        const resizer = document.createElement('div');
+        resizer.className = 'log-pane-resizer';
+        resizer.dataset.leftTabId = tab.id;
+        resizer.dataset.rightTabId = logTabs[i + 1].id;
+        tab.pane.appendChild(resizer);
+      }
+    }
+  }
+
+  /**
+   * @param {{ id: string; name: string }} tab
+   * @returns {{ pane: HTMLElement; container: HTMLElement }}
+   */
+  function createLogPaneElements(tab) {
+    const pane = document.createElement('section');
+    pane.className = 'log-pane';
+    pane.dataset.tabId = tab.id;
+    pane.style.flexBasis = (100 / (logTabs.length + 1)) + '%';
+
+    const title = document.createElement('button');
+    title.type = 'button';
+    title.className = 'log-pane-title';
+    title.dataset.tabId = tab.id;
+    title.setAttribute('role', 'tab');
+    title.hidden = logTabs.length === 0;
+
+    const label = document.createElement('span');
+    label.className = 'log-tab-label';
+    label.textContent = tab.name;
+    title.appendChild(label);
+
+    const paneContainer = document.createElement('div');
+    paneContainer.className = 'log-container';
+
+    pane.appendChild(title);
+    pane.appendChild(paneContainer);
+    panesRoot.appendChild(pane);
+    return { pane, container: paneContainer };
+  }
+
+  /**
+   * @param {{ id: string; name: string; filterText: string; filterMode: string; showSystemLogs: boolean; pane: HTMLElement; container: HTMLElement; visibleCount: number; userAtBottom: boolean }} tab
+   */
+  function renderLogPaneEntries(tab) {
+    tab.container.innerHTML = '';
+    const fragment = document.createDocumentFragment();
+    for (const entry of logEntries) {
+      const el = createEntryElement(entry);
+      fragment.appendChild(el);
+    }
+    tab.container.appendChild(fragment);
+    applyFiltersForTab(tab);
+  }
+
+  function createLogTabFromCurrentFilters() {
+    syncActiveLogTabState();
+    const id = 'tab-' + nextLogTabId++;
+    const state = currentFilterState();
+    const tab = {
+      id,
+      name: deriveTabName(state, logTabs.length + 1),
+      filterText: state.filterText,
+      filterMode: state.filterMode,
+      showSystemLogs: state.showSystemLogs,
+      pane: /** @type {HTMLElement} */ (document.createElement('section')),
+      container: /** @type {HTMLElement} */ (document.createElement('div')),
+      visibleCount: 0,
+      userAtBottom: true,
+    };
+    const elements = createLogPaneElements(tab);
+    tab.pane = elements.pane;
+    tab.container = elements.container;
+    logTabs.push(tab);
+    activeLogTabId = id;
+    renderLogTabs();
+    renderLogPaneEntries(tab);
+    applyLogTabState(tab);
+    filterInput.focus();
+    filterInput.select();
+  }
+
+  /**
+   * @param {string} tabId
+   */
+  function activateLogTab(tabId) {
+    if (tabId === activeLogTabId) {
+      return;
+    }
+    syncActiveLogTabState();
+    const tab = logTabs.find((candidate) => candidate.id === tabId);
+    if (!tab) {
+      return;
+    }
+    activeLogTabId = tab.id;
+    container = tab.container;
+    setSelectedLogEntry(null);
+    filterMatches = [];
+    filterMatchIndex = -1;
+    lastFindHighlightQuery = '';
+    renderLogTabs();
+    applyLogTabState(tab);
+  }
+
   // ── Smart auto-scroll ──
   let userAtBottom = true;
   const SCROLL_THRESHOLD = 30;
@@ -262,9 +499,60 @@
     vscode.postMessage({ command: 'openDartLocation', packageName: pkg, relativePath: rel, line, column: col });
   });
 
+  panesRoot.addEventListener('click', (e) => {
+    const link = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.dart-source-link'));
+    if (!link || !panesRoot.contains(link)) { return; }
+    const pane = /** @type {HTMLElement | null} */ (link.closest('.log-pane[data-tab-id]'));
+    if (pane?.dataset.tabId) {
+      activateLogTab(pane.dataset.tabId);
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const pkg = link.dataset.package;
+    const rel = link.dataset.relativePath;
+    const line = parseInt(link.dataset.line || '0', 10);
+    const col = parseInt(link.dataset.column || '1', 10);
+    if (!pkg || !rel) { return; }
+    vscode.postMessage({ command: 'openDartLocation', packageName: pkg, relativePath: rel, line, column: col });
+  }, true);
+
+  panesRoot.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') { return; }
+    const link = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.dart-source-link'));
+    if (!link || !panesRoot.contains(link)) { return; }
+    const pane = /** @type {HTMLElement | null} */ (link.closest('.log-pane[data-tab-id]'));
+    if (pane?.dataset.tabId) {
+      activateLogTab(pane.dataset.tabId);
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const pkg = link.dataset.package;
+    const rel = link.dataset.relativePath;
+    const line = parseInt(link.dataset.line || '0', 10);
+    const col = parseInt(link.dataset.column || '1', 10);
+    if (!pkg || !rel) { return; }
+    vscode.postMessage({ command: 'openDartLocation', packageName: pkg, relativePath: rel, line, column: col });
+  }, true);
+
   container.addEventListener(
     'toggle',
     () => {
+      updateToolbarActionState();
+      if (suppressBulkToggleRefresh > 0) {
+        return;
+      }
+      scheduleRefreshFindHighlights();
+    },
+    true,
+  );
+
+  panesRoot.addEventListener(
+    'toggle',
+    (e) => {
+      const pane = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.log-pane[data-tab-id]'));
+      if (pane?.dataset.tabId && pane.dataset.tabId !== activeLogTabId) {
+        activateLogTab(pane.dataset.tabId);
+      }
       updateToolbarActionState();
       if (suppressBulkToggleRefresh > 0) {
         return;
@@ -770,13 +1058,102 @@
     vscode.postMessage({ command: 'openNewViewer' });
   });
 
+  btnNewTab.addEventListener('click', () => {
+    createLogTabFromCurrentFilters();
+  });
+
   filterInput.addEventListener('input', () => {
     filterText = filterInput.value.toLowerCase();
+    syncActiveLogTabState();
     applyFilters();
   });
 
   btnFilterPrev.addEventListener('click', () => {
     navigateFilterMatch(-1);
+  });
+
+  panesRoot.addEventListener('click', (e) => {
+    const target = /** @type {HTMLElement | null} */ (e.target instanceof Element ? /** @type {HTMLElement} */ (e.target) : null);
+    if (!target || target.closest('.dart-source-link')) {
+      return;
+    }
+    const pane = /** @type {HTMLElement | null} */ (
+      target.closest('.log-pane[data-tab-id]')
+    );
+    if (!pane) {
+      return;
+    }
+    const tabId = pane.dataset.tabId;
+    if (tabId) {
+      activateLogTab(tabId);
+    }
+    const entry = /** @type {HTMLElement | null} */ (target.closest('.log-entry'));
+    if (entry && !entry.classList.contains('hidden')) {
+      handleLogEntryClick(entry, target);
+    }
+  });
+
+  panesRoot.addEventListener('scroll', (e) => {
+    const target = /** @type {HTMLElement} */ (e.target);
+    if (!target.classList.contains('log-container')) {
+      return;
+    }
+    const tab = logTabs.find((candidate) => candidate.container === target);
+    if (!tab) {
+      return;
+    }
+    const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+    tab.userAtBottom = distanceFromBottom <= SCROLL_THRESHOLD;
+    if (tab.id === activeLogTabId) {
+      userAtBottom = tab.userAtBottom;
+    }
+  }, true);
+
+  panesRoot.addEventListener('pointerdown', (e) => {
+    const resizer = /** @type {HTMLElement | null} */ (
+      /** @type {HTMLElement} */ (e.target).closest('.log-pane-resizer')
+    );
+    if (!resizer) {
+      return;
+    }
+    e.preventDefault();
+    const left = logTabs.find((tab) => tab.id === resizer.dataset.leftTabId);
+    const right = logTabs.find((tab) => tab.id === resizer.dataset.rightTabId);
+    if (!left || !right) {
+      return;
+    }
+
+    const rootRect = panesRoot.getBoundingClientRect();
+    const leftStart = left.pane.getBoundingClientRect().width;
+    const rightStart = right.pane.getBoundingClientRect().width;
+    const startX = e.clientX;
+    const total = leftStart + rightStart;
+    const min = Math.min(180, total / 2);
+
+    resizer.classList.add('dragging');
+    document.body.classList.add('dragging-log-pane');
+    resizer.setPointerCapture(e.pointerId);
+
+    function onMove(moveEvent) {
+      const delta = moveEvent.clientX - startX;
+      const nextLeft = Math.max(min, Math.min(total - min, leftStart + delta));
+      const nextRight = total - nextLeft;
+      left.pane.style.flexBasis = (nextLeft / rootRect.width * 100) + '%';
+      right.pane.style.flexBasis = (nextRight / rootRect.width * 100) + '%';
+    }
+
+    function onUp(upEvent) {
+      resizer.releasePointerCapture(upEvent.pointerId);
+      resizer.classList.remove('dragging');
+      document.body.classList.remove('dragging-log-pane');
+      resizer.removeEventListener('pointermove', onMove);
+      resizer.removeEventListener('pointerup', onUp);
+      resizer.removeEventListener('pointercancel', onUp);
+    }
+
+    resizer.addEventListener('pointermove', onMove);
+    resizer.addEventListener('pointerup', onUp);
+    resizer.addEventListener('pointercancel', onUp);
   });
 
   btnFilterNext.addEventListener('click', () => {
@@ -800,13 +1177,8 @@
 
   chipSystem.addEventListener('click', () => {
     showSystemLogs = !showSystemLogs;
-    if (showSystemLogs) {
-      chipSystem.classList.add('active');
-      chipSystem.setAttribute('aria-checked', 'true');
-    } else {
-      chipSystem.classList.remove('active');
-      chipSystem.setAttribute('aria-checked', 'false');
-    }
+    updateSystemChipUI();
+    syncActiveLogTabState();
     applyFilters();
   });
 
@@ -830,6 +1202,7 @@
     if (next === current) {
       if (next !== 'all') {
         filterMode = 'all';
+        syncActiveLogTabState();
         updateChipUI();
         applyFilters();
         focusMutexChipByCategory('all');
@@ -837,6 +1210,7 @@
       return;
     }
     filterMode = next;
+    syncActiveLogTabState();
     updateChipUI();
     applyFilters();
   });
@@ -861,26 +1235,23 @@
   function addEntry(entry) {
     normalizeEntry(entry);
     ensureCategoryAndChip(entry.category);
-    totalCount++;
-    const el = createEntryElement(entry);
-    container.appendChild(el);
+    logEntries.push(entry);
+    while (logEntries.length > maxLogs) {
+      logEntries.shift();
+    }
+    totalCount = logEntries.length;
 
-    // Trim oldest DOM nodes to enforce maxLogs limit
-    while (container.children.length > maxLogs) {
-      const removed = container.firstElementChild;
-      if (!removed) { break; }
-      if (!removed.classList.contains('hidden')) {
-        visibleCount--;
+    for (const tab of logTabs) {
+      const el = createEntryElement(entry);
+      tab.container.appendChild(el);
+      while (tab.container.children.length > maxLogs) {
+        const removed = tab.container.firstElementChild;
+        if (!removed) { break; }
+        tab.container.removeChild(removed);
       }
-      container.removeChild(removed);
-      totalCount--;
+      applyFiltersForTab(tab);
     }
 
-    const isVisible = applyFilterToElement(el, entry);
-    if (isVisible) { visibleCount++; }
-    updateCounter(visibleCount);
-    updateToolbarActionState();
-    scheduleRefreshFindHighlights();
     autoScroll();
   }
 
@@ -888,19 +1259,21 @@
    * @param {any[]} entries
    */
   function addBatch(entries) {
-    container.innerHTML = '';
+    logEntries.length = 0;
     totalCount = 0;
     visibleCount = 0;
-    const fragment = document.createDocumentFragment();
     for (const entry of entries) {
       normalizeEntry(entry);
       ensureCategoryAndChip(entry.category);
-      totalCount++;
-      const el = createEntryElement(entry);
-      fragment.appendChild(el);
+      logEntries.push(entry);
     }
-    container.appendChild(fragment);
-    applyFilters();
+    while (logEntries.length > maxLogs) {
+      logEntries.shift();
+    }
+    totalCount = logEntries.length;
+    for (const tab of logTabs) {
+      renderLogPaneEntries(tab);
+    }
     updateToolbarActionState();
     autoScroll();
   }
@@ -912,7 +1285,12 @@
     }
     setSelectedLogEntry(null);
     lastFindHighlightQuery = '';
-    container.innerHTML = '';
+    logEntries.length = 0;
+    for (const tab of logTabs) {
+      tab.container.innerHTML = '';
+      tab.visibleCount = 0;
+      tab.userAtBottom = true;
+    }
     totalCount = 0;
     visibleCount = 0;
     userAtBottom = true;
@@ -1353,8 +1731,26 @@
 
   // ── Filtering ──
 
-  function applyFilters() {
-    const entries = container.querySelectorAll('.log-entry');
+  /**
+   * @param {string} category
+   * @param {string} source
+   * @param {string} searchText
+   * @param {{ filterText: string; filterMode: string; showSystemLogs: boolean }} state
+   * @returns {boolean}
+   */
+  function matchesFilterState(category, source, searchText, state) {
+    const sourceMatch = source === 'flutter' || state.showSystemLogs;
+    const categoryMatch = entryMatchesFilterMode(category, state.filterMode);
+    const text = String(state.filterText || '').toLowerCase();
+    const textMatch = !text || searchText.includes(text);
+    return sourceMatch && categoryMatch && textMatch;
+  }
+
+  /**
+   * @param {{ id: string; name: string; filterText: string; filterMode: string; showSystemLogs: boolean; pane: HTMLElement; container: HTMLElement; visibleCount: number; userAtBottom: boolean }} tab
+   */
+  function applyFiltersForTab(tab) {
+    const entries = tab.container.querySelectorAll('.log-entry');
     let count = 0;
 
     entries.forEach((el) => {
@@ -1363,11 +1759,7 @@
       const source = element.dataset.source || 'flutter';
       const searchText = element.dataset.searchText || '';
 
-      const sourceMatch = source === 'flutter' || showSystemLogs;
-      const categoryMatch = entryMatchesFilterMode(category, filterMode);
-      const textMatch = !filterText || searchText.includes(filterText);
-
-      if (sourceMatch && categoryMatch && textMatch) {
+      if (matchesFilterState(category, source, searchText, tab)) {
         element.classList.remove('hidden');
         count++;
       } else {
@@ -1375,10 +1767,24 @@
       }
     });
 
-    visibleCount = count;
-    updateCounter(visibleCount);
-    updateToolbarActionState();
-    scheduleRefreshFindHighlights();
+    tab.visibleCount = count;
+    if (tab.id === activeLogTabId) {
+      visibleCount = count;
+      updateCounter(visibleCount);
+      updateToolbarActionState();
+      scheduleRefreshFindHighlights();
+    }
+  }
+
+  function applyFilters() {
+    const tab = getActiveLogTab();
+    if (!tab) {
+      return;
+    }
+    tab.filterText = filterInput.value;
+    tab.filterMode = normalizeFilterMode(filterMode);
+    tab.showSystemLogs = showSystemLogs;
+    applyFiltersForTab(tab);
   }
 
   /**
@@ -1395,11 +1801,7 @@
     const category = normalizeCategoryKey(entry.category);
     const searchText = el.dataset.searchText || '';
 
-    const sourceMatch = source === 'flutter' || showSystemLogs;
-    const categoryMatch = entryMatchesFilterMode(category, filterMode);
-    const textMatch = !filterText || searchText.includes(filterText);
-
-    if (!sourceMatch || !categoryMatch || !textMatch) {
+    if (!matchesFilterState(category, source, searchText, currentFilterState())) {
       el.classList.add('hidden');
       return false;
     }
@@ -1444,8 +1846,10 @@
   }
 
   function autoScroll() {
-    if (userAtBottom) {
-      container.scrollTop = container.scrollHeight;
+    for (const tab of logTabs) {
+      if (tab.userAtBottom) {
+        tab.container.scrollTop = tab.container.scrollHeight;
+      }
     }
   }
 

@@ -32,10 +32,10 @@ const MAX_SUMMARY_LENGTH = 120;
 const DEFAULT_MAX_BLOCK_LINES = 50_000;
 const TAG_SCAN_LIMIT = 100;
 /**
- * Explicit custom tags must use double braces, e.g. `{{GoRouter}}`.
- * This avoids accidental matches on arbitrary bracketed payloads such as arrays.
+ * Explicit custom tags must be line-start headers, e.g. `{{GoRouter}}` or `  {{GoRouter}}`.
+ * This keeps payload text like `message {{not-a-chip}}` from creating noisy filter chips.
  */
-const EXPLICIT_TAG_REGEX = /(?:^|\s*)\{\{([\p{L}_][\p{L}\p{N}_\-\s]*)\}\}(?=$|\s|[|:,.!?])/gu;
+const EXPLICIT_TAG_REGEX = /^\s*\{\{\s*([\p{L}_][\p{L}\p{N}_\-\s]*?)\s*\}\}/u;
 
 const severitySet = new Set<string>(SEVERITY_LEVELS);
 
@@ -346,17 +346,18 @@ export class LogParser {
 
   /**
    * Explicit custom tags on a line: every non-severity tag is registered for filter chips.
-   * Tags must be wrapped as `{{tag}}`, which keeps accidental payloads from becoming chips.
-   * When several `{{...}}` appear (e.g. "{{UrlParser}} ... {{GoRouter}}"), the **last**
-   * non-severity tag wins as category so the GoRouter filter matches real router lines
-   * after another tag.
+   * Tags must be line-start headers, which keeps accidental payloads
+   * from becoming chips. When several `{{...}}` headers appear at the start, the
+   * **last** non-severity tag wins as category.
    */
   private tryExplicitTagCategory(text: string): LogCategory | null {
-    const scanText = text.substring(0, TAG_SCAN_LIMIT);
+    let scanText = text.substring(0, TAG_SCAN_LIMIT);
     const rawTags: string[] = [];
-    let m: RegExpExecArray | null;
-    while ((m = EXPLICIT_TAG_REGEX.exec(scanText)) !== null) {
+    let m = scanText.match(EXPLICIT_TAG_REGEX);
+    while (m !== null) {
       rawTags.push(m[1]);
+      scanText = scanText.substring(m[0].length);
+      m = scanText.match(EXPLICIT_TAG_REGEX);
     }
     if (rawTags.length === 0) {
       return null;
