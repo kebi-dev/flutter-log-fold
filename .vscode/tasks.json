@@ -6,7 +6,11 @@
       "script": "build",
       "group": "build",
       "label": "npm: build",
-      "problemMatcher": []
+      "problemMatcher": [],
+      "inAgents": true,
+      "runOptions": {
+        "runOn": "worktreeCreated"
+      }
     },
     {
       "type": "npm",
